@@ -334,8 +334,6 @@ pipeline {
         steps {
         powershell '''
         $ErrorActionPreference = "Stop"
-
-        ```
                 # --------------------------------------------------
                 # Validate required values
                 # --------------------------------------------------
@@ -418,10 +416,8 @@ pipeline {
                 Write-Host "======================================"
             '''
         }
-        ```
-        }
-
-    }
+     }
+  }
 
     post {
         always {
