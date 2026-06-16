@@ -408,7 +408,7 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Publish to Confluence') {
             when {
                 expression { return params.PUBLISH_TO_CONFLUENCE }
@@ -432,14 +432,25 @@ pipeline {
 
                     Write-Host "Getting current page version..."
 
-                    $pageInfo = Invoke-RestMethod `
+                    $searchUrl = "$env:CONFLUENCE_URL/rest/api/content?title=Flask&spaceKey=DEMO&expand=version"
+
+                    $pageSearch = Invoke-RestMethod `
                         -Method Get `
-                        -Uri "$env:CONFLUENCE_URL/rest/api/content/$pageId?expand=version" `
+                        -Uri $searchUrl `
                         -Headers $headers
 
-                    $newVersion = $pageInfo.version.number + 1
+                    if ($pageSearch.size -eq 0) {
+                        throw "Confluence page not found."
+                    }
 
-                    Write-Host "Current Version : $($pageInfo.version.number)"
+                    $pageInfo = $pageSearch.results[0]
+
+                    $pageId = $pageInfo.id
+                    $currentVersion = $pageInfo.version.number
+                    $newVersion = $currentVersion + 1
+
+                    Write-Host "Page ID         : $pageId"
+                    Write-Host "Current Version : $currentVersion"
                     Write-Host "New Version     : $newVersion"
 
                     $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
