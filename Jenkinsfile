@@ -20,11 +20,11 @@ pipeline {
         // ------------------------------------------------------------
         // Email distribution
         // ------------------------------------------------------------
-        string(name: 'EMAIL_TO', defaultValue: 'projectworkuser@gmail.com', description: 'TO recipients (comma-separated)')
-        string(name: 'EMAIL_CC', defaultValue: 'projectworkuser@gmail.com', description: 'CC recipients (comma-separated)')
-        string(name: 'EMAIL_BCC', defaultValue: 'projectworkuser@gmail.com', description: 'BCC recipients (comma-separated)')
-        string(name: 'EMAIL_FROM', defaultValue: 'jenkins@example.com', description: 'From address')
-        string(name: 'EMAIL_REPLY_TO', defaultValue: 'noreply@example.com', description: 'Reply-To address')
+        string(name: 'EMAIL_TO', defaultValue: 'devopsuser8413@gmail.com', description: 'TO recipients (comma-separated)')
+        string(name: 'EMAIL_CC', defaultValue: 'devopsuser8413@gmail.com', description: 'CC recipients (comma-separated)')
+        string(name: 'EMAIL_BCC', defaultValue: 'devopsuser8413@gmail.com', description: 'BCC recipients (comma-separated)')
+        string(name: 'EMAIL_FROM', defaultValue: 'projectworkuser@gmail.com', description: 'From address')
+        string(name: 'EMAIL_REPLY_TO', defaultValue: 'projectworkuser@gmail.com', description: 'Reply-To address')
 
         booleanParam(name: 'PUBLISH_EMAIL', defaultValue: true, description: 'Send ZIPs by email')
         booleanParam(name: 'PUBLISH_CONFLUENCE', defaultValue: false, description: 'Publish ZIPs to Confluence')
@@ -84,7 +84,7 @@ pipeline {
 
         // Optional SMTP credentials declaration
         // Credential type: Username with password
-        SMTP_CREDS = credentials('smtp-username-password')
+        SMTP_CREDS = credentials('smtp-projectwork-password')
 
         // ------------------------------------------------------------
         // Confluence environment variables
@@ -97,7 +97,7 @@ pipeline {
         CONFLUENCE_URL       = "${params.CONFLUENCE_BASE_URL}"
         CONFLUENCE_SPACE     = "${params.CONFLUENCE_SPACE_KEY}"
         CONFLUENCE_PARENT_ID = "${params.CONFLUENCE_PARENT_PAGE_ID}"
-        CONFLUENCE_CREDS     = credentials('confluence-username-token')
+        CONFLUENCE_CREDS     = credentials('confluence-projectwork-token')
 
         // ------------------------------------------------------------
         // GitHub environment variables
