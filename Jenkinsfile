@@ -328,75 +328,99 @@ pipeline {
         }
 
         stage('Publish to Confluence') {
-            when {
-                expression { return params.PUBLISH_TO_CONFLUENCE }
-            }
-            steps {
-                powershell '''
+        when {
+        expression { return params.PUBLISH_TO_CONFLUENCE }
+        }
+        steps {
+        powershell '''
         $ErrorActionPreference = "Stop"
 
-        # --------------------------------------------------
-        # Validate required values
-        # --------------------------------------------------
-        if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
-            throw "CONFLUENCE_BASE_URL is required."
+        ```
+                # --------------------------------------------------
+                # Validate required values
+                # --------------------------------------------------
+                if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
+                    throw "CONFLUENCE_BASE_URL is required."
+                }
+
+                if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
+                    [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
+                    throw "Confluence credentials are missing."
+                }
+
+                # Use configured page ID
+                $pageId = $env:CONFLUENCE_PARENT_ID
+
+                if ([string]::IsNullOrWhiteSpace($pageId)) {
+                    throw "CONFLUENCE_PARENT_PAGE_ID is required."
+                }
+
+                Write-Host "======================================"
+                Write-Host "Confluence Upload Configuration"
+                Write-Host "======================================"
+                Write-Host "Confluence URL : $env:CONFLUENCE_URL"
+                Write-Host "Page ID        : $pageId"
+                Write-Host "User           : $env:CONFLUENCE_CREDS_USR"
+                Write-Host "Dist Directory : $env:DIST_DIR"
+                Write-Host "======================================"
+
+                # --------------------------------------------------
+                # Files to upload
+                # --------------------------------------------------
+                $filesToUpload = @(
+                    (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
+                    (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
+                )
+
+                foreach ($filePath in $filesToUpload) {
+
+                    if (-not (Test-Path $filePath)) {
+                        throw "Attachment file not found: $filePath"
+                    }
+
+                    $fileName = [System.IO.Path]::GetFileName($filePath)
+
+                    Write-Host ""
+                    Write-Host "Uploading attachment: $fileName"
+
+                    $safeName = $fileName -replace '[^a-zA-Z0-9._-]', '_'
+                    $attachResponseFile = "attach_${safeName}.json"
+
+                    $attachStatus = curl.exe -sS `
+                        -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
+                        -H "X-Atlassian-Token: nocheck" `
+                        -X POST `
+                        -F "file=@$filePath" `
+                        "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment" `
+                        -o $attachResponseFile `
+                        -w "%{http_code}"
+
+                    $attachResponseText = ""
+
+                    if (Test-Path $attachResponseFile) {
+                        $attachResponseText = Get-Content $attachResponseFile -Raw
+                    }
+
+                    Write-Host "Attachment upload status for ${fileName}: $attachStatus"
+                    Write-Host "Attachment upload response for ${fileName}:"
+                    Write-Host $attachResponseText
+
+                    if ($attachStatus -notin @("200", "201")) {
+                        throw "Attachment upload failed for ${fileName} with HTTP status $attachStatus"
+                    }
+
+                    Write-Host "Successfully uploaded ${fileName}"
+                }
+
+                Write-Host ""
+                Write-Host "======================================"
+                Write-Host "Confluence artifact upload completed successfully"
+                Write-Host "======================================"
+            '''
+        }
+        ```
         }
 
-        if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
-            [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
-            throw "Confluence credentials are missing."
-        }
-
-        # Use the existing page ID directly
-        $pageId = "131214"
-        Write-Host "Uploading artifacts to existing Confluence page ID: $pageId"
-
-        # --------------------------------------------------
-        # Files to upload
-        # --------------------------------------------------
-        $filesToUpload = @(
-            (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
-            (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
-        )
-
-        foreach ($filePath in $filesToUpload) {
-            if (-not (Test-Path $filePath)) {
-                throw "Attachment file not found: $filePath"
-            }
-
-            $fileName = [System.IO.Path]::GetFileName($filePath)
-            Write-Host "Uploading attachment: $fileName"
-
-            $safeName = $fileName -replace '[^a-zA-Z0-9._-]', '_'
-            $attachResponseFile = "attach_${safeName}.json"
-
-            $attachStatus = curl.exe -sS `
-            -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
-            -H "X-Atlassian-Token: nocheck" `
-            -X POST `
-            -F "file=@$filePath" `
-            "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment" `
-            -o $attachResponseFile `
-            -w "%{http_code}"
-
-            $attachResponseText = ""
-            if (Test-Path $attachResponseFile) {
-                $attachResponseText = Get-Content $attachResponseFile -Raw
-            }
-
-            Write-Host "Attachment upload status for $fileName: $attachStatus"
-            Write-Host "Attachment upload response for $fileName:"
-            Write-Host $attachResponseText
-
-            if ($attachStatus -notin @("200","201")) {
-                throw "Attachment upload failed for $fileName with HTTP status $attachStatus"
-            }
-        }
-
-        Write-Host "Confluence artifact upload completed successfully"
-        '''
-            }
-        }
     }
 
     post {
