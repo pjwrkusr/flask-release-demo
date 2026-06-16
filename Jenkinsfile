@@ -198,12 +198,12 @@ pipeline {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    if (:IsNullOrWhiteSpace($env:GH_OWNER) -or :IsNullOrWhiteSpace($env:GH_REPO)) {
+                    if ([string]::IsNullOrWhiteSpace($env:GH_OWNER) -or [string]::IsNullOrWhiteSpace($env:GH_REPO)) {
                         throw "GITHUB_OWNER and GITHUB_REPO are required."
                     }
 
-                    if (:IsNullOrWhiteSpace($env:GH_TOKEN)) {
-                        throw "GH_TOKEN is empty. Check Jenkins credential 'github-token'."
+                    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+                        throw "GH_TOKEN is empty."
                     }
 
                     Write-Host "GitHub owner : $env:GH_OWNER"
