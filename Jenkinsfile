@@ -335,7 +335,7 @@ pipeline {
         $ErrorActionPreference = "Stop"
 
         # -------------------------------
-        # Validate inputs
+        # Validate required values
         # -------------------------------
         if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
             throw "CONFLUENCE_BASE_URL is required."
@@ -347,11 +347,13 @@ pipeline {
 
         if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
             [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
-            throw "Confluence credentials missing."
+            throw "Confluence credentials are missing."
         }
 
         # -------------------------------
-        # Build page content (NO here-string)
+        # Build page payload
+        # Follows the documented shape:
+        # type, title, space.key, body.storage.value, body.storage.representation
         # -------------------------------
         $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
 
@@ -380,30 +382,38 @@ pipeline {
         }
 
         $jsonBody = $payload | ConvertTo-Json -Depth 20
+        Set-Content -Path page_payload.json -Value $jsonBody -Encoding UTF8
+
+        Write-Host "Creating Confluence page: $pageTitle"
+        Write-Host "Confluence URL: $env:CONFLUENCE_URL"
+        Write-Host "Space key: $env:CONFLUENCE_SPACE"
 
         # -------------------------------
-        # Auth (API token)
+        # Create page using curl.exe
+        # Auth uses email + API token with basic auth, as documented by Atlassian
         # -------------------------------
-        $pair = "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW"
-        $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
-        $basicToken = [System.Convert]::ToBase64String($bytes)
+        $responseFile = "confluence_create_response.json"
 
-        $headers = @{
-            "Authorization" = "Basic $basicToken"
-            "Content-Type"  = "application/json"
+        curl.exe -sS `
+        -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
+        -H "Content-Type: application/json" `
+        -X POST `
+        --data @page_payload.json `
+        "$env:CONFLUENCE_URL/rest/api/content" `
+        -o $responseFile
+
+        if (-not (Test-Path $responseFile)) {
+            throw "No response file returned from Confluence create page request."
         }
 
-        # -------------------------------
-        # Create Confluence page
-        # -------------------------------
-        $pageResponse = Invoke-RestMethod `
-            -Method Post `
-            -Uri "$env:CONFLUENCE_URL/rest/api/content" `
-            -Headers $headers `
-            -Body $jsonBody
+        $responseText = Get-Content $responseFile -Raw
+        Write-Host "Create page response:"
+        Write-Host $responseText
+
+        $pageResponse = $responseText | ConvertFrom-Json
 
         if (-not $pageResponse.id) {
-            throw "Failed to create Confluence page"
+            throw "Confluence page creation failed. Review the response above for the exact validation error."
         }
 
         $pageId = "$($pageResponse.id)"
@@ -411,57 +421,40 @@ pipeline {
 
         # -------------------------------
         # Upload attachments
+        # Uses the documented attachment endpoint and X-Atlassian-Token: nocheck
         # -------------------------------
-        Add-Type -AssemblyName System.Net.Http
-
-        $client = New-Object System.Net.Http.HttpClient
-        $client.DefaultRequestHeaders.Add("Authorization", "Basic $basicToken")
-        $client.DefaultRequestHeaders.Add("X-Atlassian-Token", "nocheck")
-
         $filesToUpload = @(
             (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
             (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
         )
 
         foreach ($filePath in $filesToUpload) {
-
             if (-not (Test-Path $filePath)) {
-                throw "File not found: $filePath"
+                throw "Attachment file not found: $filePath"
             }
-
-            Write-Host "Uploading: $filePath"
-
-            $multipart = New-Object System.Net.Http.MultipartFormDataContent
-            $fileBytes = [System.IO.File]::ReadAllBytes($filePath)
-
-            # ✅ Critical fix for byte array
-            $fileContent = New-Object System.Net.Http.ByteArrayContent (,$fileBytes)
-
-            $fileContent.Headers.ContentType = `
-                [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/octet-stream")
 
             $fileName = [System.IO.Path]::GetFileName($filePath)
-            $multipart.Add($fileContent, "file", $fileName)
+            Write-Host "Uploading attachment: $fileName"
 
-            $uploadUrl = "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment"
+            $attachResponseFile = "attach_$fileName.json"
 
-            $response = $client.PostAsync($uploadUrl, $multipart).Result
+            curl.exe -sS `
+            -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
+            -H "X-Atlassian-Token: nocheck" `
+            -X POST `
+            -F "file=@$filePath" `
+            "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment" `
+            -o $attachResponseFile
 
-            if (-not $response.IsSuccessStatusCode) {
-                $err = $response.Content.ReadAsStringAsync().Result
-                throw "Upload failed: $fileName → $($response.StatusCode) → $err"
-            }
-
-            Write-Host "✅ Uploaded: $fileName"
+            $attachResponseText = Get-Content $attachResponseFile -Raw
+            Write-Host "Attachment upload response for $fileName:"
+            Write-Host $attachResponseText
         }
-
-        $client.Dispose()
 
         Write-Host "✅ Confluence publish completed successfully"
         '''
             }
         }
-
     }
 
     post {
