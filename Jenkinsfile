@@ -98,10 +98,15 @@ pipeline {
         )
 
         // Release Notes
-        string(
-            name: 'RELEASE_NOTE_PATH',
-            defaultValue: 'C:\\Users\\I17270834\\Downloads\\Release_Notes_v1.0.0.pdf',
-            description: 'Local PDF path on Jenkins server'
+        // string(
+        //     name: 'RELEASE_NOTE_PATH',
+        //     defaultValue: 'C:\\Users\\I17270834\\Downloads\\Release_Notes_v1.0.0.pdf',
+        //     description: 'Local PDF path on Jenkins server'
+        // )
+
+        stashedFile(
+            name: 'RELEASE_NOTE_FILE',
+            description: 'Upload Release Notes PDF'
         )
 
         // Confluence Configuration
@@ -222,28 +227,17 @@ pipeline {
          *******************************************************************************************/
         stage('Process release note') {
             steps {
+                unstash 'RELEASE_NOTE_FILE'
+
                 powershell '''
-                    $ErrorActionPreference = "Stop"
+                    New-Item -ItemType Directory `
+                        -Force `
+                        -Path $env:RELEASE_NOTES_DIR | Out-Null
 
-                    $file = "$env:RELEASE_NOTE_PATH"
-
-                    if ([string]::IsNullOrWhiteSpace($file)) {
-                        throw "RELEASE_NOTE_PATH is empty."
-                    }
-
-                    if (-not (Test-Path $file)) {
-                        throw "File not found: $file"
-                    }
-
-                    $ext = [System.IO.Path]::GetExtension($file)
-                    if ($ext -notin @(".pdf", ".PDF")) {
-                        throw "File must be PDF: $file"
-                    }
-
-                    Copy-Item $file -Destination $env:RELEASE_NOTES_DIR -Force
-
-                    Write-Host "Copied release note: $file"
-                    Get-ChildItem $env:RELEASE_NOTES_DIR | Format-Table Name, Length, LastWriteTime -AutoSize
+                    Copy-Item `
+                        RELEASE_NOTE_FILE `
+                        $env:RELEASE_NOTES_DIR `
+                        -Force
                 '''
             }
         }
@@ -478,7 +472,7 @@ pipeline {
         }
 
         /*******************************************************************************************
-         * STAGE 9 - PUBLISH TO CONFLUENCE
+         * STAGE 7 - PUBLISH TO CONFLUENCE
          *
          * Actions:
          *   - Retrieve Page Information
