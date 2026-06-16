@@ -20,7 +20,7 @@ pipeline {
 
         booleanParam(name: 'PUBLISH_EMAIL', defaultValue: true)
 
-        file(name: 'RELEASE_NOTE_FILE', description: 'Upload ONE release note PDF')
+        string(name: 'RELEASE_NOTE_PATH', defaultValue: 'C:\\temp\\release.pdf', description: 'Local file path on Jenkins machine')
 
         string(name: 'CONFLUENCE_BASE_URL', defaultValue: 'https://projectworkuser.atlassian.net/wiki')
         string(name: 'CONFLUENCE_SPACE_KEY', defaultValue: 'DEMO')
@@ -72,31 +72,25 @@ pipeline {
 
         stage('Process release note') {
             steps {
-                script {
-                    if (!params.RELEASE_NOTE_FILE) {
-                        error("Please upload a release note PDF")
+                powershell '''
+                    $ErrorActionPreference = "Stop"
+
+                    $file = "$env:RELEASE_NOTE_PATH"
+
+                    if (-not (Test-Path $file)) {
+                        throw "File not found: $file"
                     }
 
-                    def file = params.RELEASE_NOTE_FILE
+                    $ext = [System.IO.Path]::GetExtension($file)
+                    if ($ext -ne ".pdf") {
+                        throw "File must be PDF"
+                    }
 
-                    powershell """
-                        \$f1 = '${file}'
-                        \$f2 = Join-Path \$env:WORKSPACE '${file}'
-                        \$src = (Test-Path \$f1) ? \$f1 : \$f2
+                    Copy-Item $file -Destination $env:RELEASE_NOTES_DIR -Force
 
-                        if (-not (Test-Path \$src)) {
-                            throw "File not found: \$src"
-                        }
-
-                        \$ext = [System.IO.Path]::GetExtension(\$src)
-                        if (\$ext -ne ".pdf") {
-                            throw "File must be PDF"
-                        }
-
-                        Copy-Item \$src -Destination \$env:RELEASE_NOTES_DIR
-                        Write-Host "Copied release note: \$src"
-                    """
-                }
+                    Write-Host "Copied release note: $file"
+                    Get-ChildItem $env:RELEASE_NOTES_DIR
+                '''
             }
         }
 
