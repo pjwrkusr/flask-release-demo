@@ -198,13 +198,25 @@ pipeline {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
+                    if ([string]::IsNullOrWhiteSpace($env:GH_OWNER) -or [string]::IsNullOrWhiteSpace($env:GH_REPO)) {
+                        throw "GITHUB_OWNER and GITHUB_REPO are required."
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+                        throw "GH_TOKEN is empty. Check Jenkins credential 'github-token'."
+                    }
+
+                    Write-Host "GitHub owner : $env:GH_OWNER"
+                    Write-Host "GitHub repo  : $env:GH_REPO"
+                    Write-Host "Release tag  : $env:RELEASE_VERSION"
+
                     $headers = @{
                         "Accept"               = "application/vnd.github+json"
                         "Authorization"        = "Bearer $env:GH_TOKEN"
                         "X-GitHub-Api-Version" = "2022-11-28"
                     }
 
-                    $tagName = "$env:RELEASE_VERSION"
+                    $tagName    = "$env:RELEASE_VERSION"
                     $releaseApi = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases"
 
                     $releasePayload = @{
@@ -216,23 +228,41 @@ pipeline {
                     } | ConvertTo-Json -Depth 10
 
                     $release = $null
+
                     try {
-                        $release = Invoke-RestMethod -Method Post -Uri $releaseApi -Headers $headers -Body $releasePayload -ContentType "application/json"
+                        $release = Invoke-RestMethod `
+                            -Method Post `
+                            -Uri $releaseApi `
+                            -Headers $headers `
+                            -Body $releasePayload `
+                            -ContentType "application/json"
+
                         Write-Host "Created new GitHub release."
                     }
                     catch {
-                        Write-Host "Release may already exist. Fetching existing release by tag."
-                        $release = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/tags/$tagName" -Headers $headers
+                        Write-Host "Create release failed. Trying to fetch existing release by tag..."
+                        Write-Host $_.Exception.Message
+
+                        $existingReleaseUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/tags/$tagName"
+
+                        $release = Invoke-RestMethod `
+                            -Method Get `
+                            -Uri $existingReleaseUrl `
+                            -Headers $headers
                     }
 
                     if (-not $release.id -or -not $release.upload_url) {
-                        throw "GitHub release ID or upload URL not returned."
+                        throw "GitHub release ID or upload URL was not returned."
                     }
 
                     $releaseId = "$($release.id)"
                     $uploadUrl = "$($release.upload_url)" -replace "\\{\\?name,label\\}", ""
 
-                    $assets = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/$releaseId/assets" -Headers $headers
+                    Write-Host "Using GitHub release ID: $releaseId"
+
+                    # List current assets on the release
+                    $assetsUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/$releaseId/assets"
+                    $assets = Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers
 
                     $targetAssetNames = @(
                         $env:RELEASE_NOTES_ZIP,
@@ -242,7 +272,8 @@ pipeline {
                     foreach ($asset in $assets) {
                         if ($targetAssetNames -contains $asset.name) {
                             Write-Host "Deleting existing asset: $($asset.name)"
-                            Invoke-RestMethod -Method Delete -Uri "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/assets/$($asset.id)" -Headers $headers
+                            $deleteUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/assets/$($asset.id)"
+                            Invoke-RestMethod -Method Delete -Uri $deleteUrl -Headers $headers
                         }
                     }
 
@@ -266,7 +297,8 @@ pipeline {
                             "Content-Type"         = "application/zip"
                         }
 
-                        Invoke-WebRequest -Method Post `
+                        Invoke-WebRequest `
+                            -Method Post `
                             -Uri $assetUploadUrl `
                             -Headers $uploadHeaders `
                             -InFile $filePath `
