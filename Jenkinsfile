@@ -9,25 +9,33 @@ pipeline {
     }
 
     parameters {
-        string(name: 'APP_NAME', defaultValue: 'flask-release-demo')
-        string(name: 'RELEASE_VERSION', defaultValue: '1.0.0')
+        string(name: 'APP_NAME', defaultValue: 'flask-release-demo', description: 'Application name')
+        string(name: 'RELEASE_VERSION', defaultValue: '1.0.0', description: 'Release version')
 
-        string(name: 'EMAIL_TO', defaultValue: 'projectworkuser@gmail.com')
-        string(name: 'EMAIL_CC', defaultValue: '')
-        string(name: 'EMAIL_BCC', defaultValue: '')
-        string(name: 'EMAIL_FROM', defaultValue: 'projectworkuser@gmail.com')
-        string(name: 'EMAIL_REPLY_TO', defaultValue: 'projectworkuser@gmail.com')
+        string(name: 'EMAIL_TO', defaultValue: 'projectworkuser@gmail.com', description: 'Primary recipients (comma-separated)')
+        string(name: 'EMAIL_CC', defaultValue: '', description: 'CC recipients (comma-separated)')
+        string(name: 'EMAIL_BCC', defaultValue: '', description: 'BCC recipients (comma-separated)')
+        string(name: 'EMAIL_FROM', defaultValue: 'projectworkuser@gmail.com', description: 'From address')
+        string(name: 'EMAIL_REPLY_TO', defaultValue: 'projectworkuser@gmail.com', description: 'Reply-To address')
 
-        booleanParam(name: 'PUBLISH_EMAIL', defaultValue: true)
+        booleanParam(name: 'PUBLISH_EMAIL', defaultValue: true, description: 'Send email with ZIP attachments')
 
-        string(name: 'RELEASE_NOTE_PATH', defaultValue: 'C:\\Users\\I17270834\\Downloads\\Release_Notes_v1.0.0.pdf', description: 'Local file path on Jenkins machine')
+        string(
+            name: 'RELEASE_NOTE_PATH',
+            defaultValue: 'C:\\Users\\I17270834\\Downloads\\Release_Notes_v1.0.0.pdf',
+            description: 'Local file path on Jenkins machine'
+        )
 
-        string(name: 'CONFLUENCE_BASE_URL', defaultValue: 'https://projectworkuser.atlassian.net/wiki')
-        string(name: 'CONFLUENCE_SPACE_KEY', defaultValue: 'DEMO')
-        string(name: 'CONFLUENCE_PARENT_PAGE_ID', defaultValue: '131214')
+        string(
+            name: 'CONFLUENCE_BASE_URL',
+            defaultValue: 'https://projectworkuser.atlassian.net/wiki',
+            description: 'Confluence base URL'
+        )
+        string(name: 'CONFLUENCE_SPACE_KEY', defaultValue: 'DEMO', description: 'Confluence space key')
+        string(name: 'CONFLUENCE_PARENT_PAGE_ID', defaultValue: '131214', description: 'Confluence parent page ID')
 
-        string(name: 'GITHUB_OWNER', defaultValue: 'pjwrkusr')
-        string(name: 'GITHUB_REPO', defaultValue: 'flask-demo-publish-docs')
+        string(name: 'GITHUB_OWNER', defaultValue: 'pjwrkusr', description: 'GitHub owner')
+        string(name: 'GITHUB_REPO', defaultValue: 'flask-demo-publish-docs', description: 'GitHub repository')
     }
 
     environment {
@@ -57,15 +65,24 @@ pipeline {
     stages {
 
         stage('Checkout') {
-            steps { checkout scm }
+            steps {
+                checkout scm
+            }
         }
 
         stage('Prepare folders') {
             steps {
                 powershell '''
+                    $ErrorActionPreference = "Stop"
+
                     New-Item -ItemType Directory -Force -Path $env:RELEASE_NOTES_DIR | Out-Null
-                    New-Item -ItemType Directory -Force -Path $env:BUILD_INPUT_DIR | Out-Null
-                    New-Item -ItemType Directory -Force -Path $env:DIST_DIR | Out-Null
+                    New-Item -ItemType Directory -Force -Path $env:BUILD_INPUT_DIR   | Out-Null
+                    New-Item -ItemType Directory -Force -Path $env:DIST_DIR          | Out-Null
+
+                    Write-Host "Prepared folders:"
+                    Write-Host " - $env:RELEASE_NOTES_DIR"
+                    Write-Host " - $env:BUILD_INPUT_DIR"
+                    Write-Host " - $env:DIST_DIR"
                 '''
             }
         }
@@ -77,19 +94,23 @@ pipeline {
 
                     $file = "$env:RELEASE_NOTE_PATH"
 
+                    if ([string]::IsNullOrWhiteSpace($file)) {
+                        throw "RELEASE_NOTE_PATH is empty."
+                    }
+
                     if (-not (Test-Path $file)) {
                         throw "File not found: $file"
                     }
 
                     $ext = [System.IO.Path]::GetExtension($file)
-                    if ($ext -ne ".pdf") {
-                        throw "File must be PDF"
+                    if ($ext -ne ".pdf" -and $ext -ne ".PDF") {
+                        throw "File must be PDF: $file"
                     }
 
                     Copy-Item $file -Destination $env:RELEASE_NOTES_DIR -Force
 
                     Write-Host "Copied release note: $file"
-                    Get-ChildItem $env:RELEASE_NOTES_DIR
+                    Get-ChildItem $env:RELEASE_NOTES_DIR | Format-Table Name, Length, LastWriteTime -AutoSize
                 '''
             }
         }
@@ -97,19 +118,39 @@ pipeline {
         stage('Create ZIPs') {
             steps {
                 powershell '''
-                    $rn = Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP
+                    $ErrorActionPreference = "Stop"
+
+                    $rn  = Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP
                     $bin = Join-Path $env:DIST_DIR $env:BINARIES_ZIP
 
-                    Compress-Archive "$env:RELEASE_NOTES_DIR\\*" $rn -Force
+                    if (Test-Path $rn)  { Remove-Item $rn -Force }
+                    if (Test-Path $bin) { Remove-Item $bin -Force }
 
-                    Copy-Item app.py $env:BUILD_INPUT_DIR -ErrorAction SilentlyContinue
-                    Compress-Archive "$env:BUILD_INPUT_DIR\\*" $bin -Force
+                    $releaseItems = Get-ChildItem -Path $env:RELEASE_NOTES_DIR -File -ErrorAction SilentlyContinue
+                    if (-not $releaseItems) {
+                        throw "No files found in release notes directory."
+                    }
+
+                    Compress-Archive -Path "$env:RELEASE_NOTES_DIR\\*" -DestinationPath $rn -Force
+
+                    if (Test-Path "app.py") {
+                        Copy-Item app.py $env:BUILD_INPUT_DIR -Force
+                    } else {
+                        "Demo binary placeholder" | Out-File (Join-Path $env:BUILD_INPUT_DIR "placeholder.txt") -Encoding utf8
+                    }
+
+                    Compress-Archive -Path "$env:BUILD_INPUT_DIR\\*" -DestinationPath $bin -Force
+
+                    Write-Host "Created ZIPs:"
+                    Get-ChildItem $env:DIST_DIR | Format-Table Name, Length, LastWriteTime -AutoSize
                 '''
             }
         }
 
         stage('Send email') {
-            when { expression { return params.PUBLISH_EMAIL } }
+            when {
+                expression { return params.PUBLISH_EMAIL }
+            }
             steps {
                 script {
                     def recipients = [
@@ -118,23 +159,43 @@ pipeline {
                         env.EMAIL_BCC_LIST
                     ].findAll { it?.trim() }.join(',')
 
-                    emailext(
-                        to: recipients,
-                        subject: "Release ${params.RELEASE_VERSION}",
-                        mimeType: 'text/html',
-                        attachmentsPattern: "${env.DIST_DIR}/*.zip",
-                        body: """
-                        <p>Hello,</p>
-                        <p>Release ${params.RELEASE_VERSION} generated.</p>
-                        <p>Files attached.</p>
-                        """
-                    )
+                    echo "Email recipients: ${recipients}"
+                    echo "Email from      : ${env.EMAIL_FROM_ADDR}"
+                    echo "Email reply-to  : ${env.EMAIL_REPLY_TO}"
+                    echo "Attachments path: ${env.DIST_DIR}/*.zip"
+
+                    try {
+                        emailext(
+                            to: recipients,
+                            from: "${env.EMAIL_FROM_ADDR}",
+                            replyTo: "${env.EMAIL_REPLY_TO}",
+                            subject: "Release ${params.RELEASE_VERSION}",
+                            mimeType: 'text/html',
+                            attachmentsPattern: "${env.DIST_DIR}/*.zip",
+                            body: """
+                                <p>Hello,</p>
+                                <p>Release <strong>${params.RELEASE_VERSION}</strong> has been generated.</p>
+                                <p>The following ZIP files are attached:</p>
+                                <ul>
+                                    <li>${env.RELEASE_NOTES_ZIP}</li>
+                                    <li>${env.BINARIES_ZIP}</li>
+                                </ul>
+                                <p>Regards,<br/>Jenkins</p>
+                            """
+                        )
+                        echo "emailext step executed."
+                    } catch (Exception e) {
+                        echo "Email sending failed: ${e.getMessage()}"
+                        throw e
+                    }
                 }
             }
         }
 
         stage('Publish to GitHub') {
-            when { expression { return false } } // disable for testing
+            when {
+                expression { return false } // disabled for testing
+            }
             steps {
                 powershell '''
                     Write-Host "GitHub step skipped for test"
@@ -143,7 +204,9 @@ pipeline {
         }
 
         stage('Publish to Confluence') {
-            when { expression { return false } }
+            when {
+                expression { return false } // disabled for testing
+            }
             steps {
                 powershell '''
                     Write-Host "Confluence step skipped for test"
@@ -154,8 +217,14 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: 'dist/*.zip'
+            archiveArtifacts artifacts: 'dist/*.zip', fingerprint: true, onlyIfSuccessful: false
             echo "Done"
+        }
+        success {
+            echo "Pipeline completed successfully."
+        }
+        failure {
+            echo "Pipeline failed."
         }
     }
 }
