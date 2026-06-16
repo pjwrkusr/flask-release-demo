@@ -194,139 +194,141 @@ pipeline {
             when {
                 expression { return params.PUBLISH_TO_GITHUB }
             }
+
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    if ([string]::IsNullOrWhiteSpace($env:GH_OWNER) -or [string]::IsNullOrWhiteSpace($env:GH_REPO)) {
-                        throw "GITHUB_OWNER and GITHUB_REPO are required."
-                    }
+                    $owner = $env:GITHUB_ORG
+                    $repo  = $env:GITHUB_REPO
+                    $tag   = $env:RELEASE_VERSION
 
-                    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-                        throw "GH_TOKEN is empty."
-                    }
-
-                    Write-Host "GitHub owner : $env:GH_OWNER"
-                    Write-Host "GitHub repo  : $env:GH_REPO"
-                    Write-Host "Release tag  : $env:RELEASE_VERSION"
+                    Write-Host "GitHub owner : $owner"
+                    Write-Host "GitHub repo  : $repo"
+                    Write-Host "Release tag  : $tag"
 
                     $headers = @{
-                        "Accept"               = "application/vnd.github+json"
-                        "Authorization"        = "Bearer $env:GH_TOKEN"
+                        Authorization = "Bearer $env:GH_TOKEN"
+                        Accept = "application/vnd.github+json"
                         "X-GitHub-Api-Version" = "2022-11-28"
+                        "User-Agent" = "Jenkins"
                     }
-
-                    $tagName    = "$env:RELEASE_VERSION"
-                    $releaseApi = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases"
-
-                    $releasePayload = @{
-                        tag_name   = $tagName
-                        name       = "$env:APP_NAME $env:RELEASE_VERSION"
-                        body       = "Automated release for $env:APP_NAME $env:RELEASE_VERSION"
-                        draft      = $false
-                        prerelease = $false
-                    } | ConvertTo-Json -Depth 10
 
                     $release = $null
-                    $createFailed = $false
 
+                    # --------------------------------------------------
+                    # Create Release
+                    # --------------------------------------------------
                     try {
+
+                        $body = @{
+                            tag_name = $tag
+                            name = "$env:APP_NAME $tag"
+                            generate_release_notes = $false
+                            draft = $false
+                            prerelease = $false
+                        } | ConvertTo-Json
+
                         $release = Invoke-RestMethod `
                             -Method Post `
-                            -Uri $releaseApi `
+                            -Uri "https://api.github.com/repos/$owner/$repo/releases" `
                             -Headers $headers `
-                            -Body $releasePayload `
+                            -Body $body `
                             -ContentType "application/json"
 
-                        Write-Host "Created new GitHub release."
+                        Write-Host "Release created successfully."
+
                     }
                     catch {
-                        $createFailed = $true
+
                         Write-Host "Create release failed."
                         Write-Host $_.Exception.Message
+
+                        Write-Host "Fetching existing release by tag..."
+
+                        $release = Invoke-RestMethod `
+                            -Method Get `
+                            -Uri "https://api.github.com/repos/$owner/$repo/releases/tags/$tag" `
+                            -Headers $headers
+
+                        Write-Host "Fetched existing release by tag."
                     }
 
-                    if (-not $release) {
-                        try {
-                            $existingReleaseUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/tags/$tagName"
-                            $release = Invoke-RestMethod `
-                                -Method Get `
-                                -Uri $existingReleaseUrl `
-                                -Headers $headers
-
-                            Write-Host "Fetched existing release by tag."
-                        }
-                        catch {
-                            Write-Host "Lookup existing release by tag failed."
-                            Write-Host $_.Exception.Message
-
-                            if ($createFailed) {
-                                throw "GitHub create-release failed, and no existing release was found by tag '$tagName'."
-                            } else {
-                                throw
-                            }
-                        }
-                    }
-
-                    if (-not $release.id -or -not $release.upload_url) {
-                        throw "GitHub release ID or upload URL was not returned."
-                    }
-
-                    $releaseId = "$($release.id)"
-                    $uploadUrl = "$($release.upload_url)" -replace "\\{\\?name,label\\}", ""
+                    $releaseId = $release.id
 
                     Write-Host "Using GitHub release ID: $releaseId"
-                    Write-Host "Resolved upload URL base: $uploadUrl"
 
-                    $assetsUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/$releaseId/assets"
-                    $assets = Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers
+                    # --------------------------------------------------
+                    # Get Existing Assets
+                    # --------------------------------------------------
+                    $assets = Invoke-RestMethod `
+                        -Method Get `
+                        -Uri "https://api.github.com/repos/$owner/$repo/releases/$releaseId/assets" `
+                        -Headers $headers
 
-                    $targetAssetNames = @(
-                        $env:RELEASE_NOTES_ZIP,
-                        $env:BINARIES_ZIP
+                    # --------------------------------------------------
+                    # Upload Files
+                    # --------------------------------------------------
+                    $files = @(
+                        (Join-Path $env:DIST_DIR $env:BINARIES_ZIP),
+                        (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP)
                     )
 
-                    foreach ($asset in $assets) {
-                        if ($targetAssetNames -contains $asset.name) {
-                            Write-Host "Deleting existing asset: $($asset.name)"
-                            $deleteUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/assets/$($asset.id)"
-                            Invoke-RestMethod -Method Delete -Uri $deleteUrl -Headers $headers | Out-Null
-                        }
-                    }
+                    foreach ($filePath in $files) {
 
-                    $filesToUpload = @(
-                        (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
-                        (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
-                    )
-
-                    foreach ($filePath in $filesToUpload) {
                         if (-not (Test-Path $filePath)) {
-                            throw "GitHub upload file not found: $filePath"
+                            throw "File not found: $filePath"
                         }
 
                         $fileName = [System.IO.Path]::GetFileName($filePath)
-                        $encodedName = [System.Uri]::EscapeDataString($fileName)
-                        $assetUploadUrl = "{0}?name={1}" -f $uploadUrl, $encodedName
 
-                        Write-Host "Uploading asset: $fileName"
-                        Write-Host "Upload URL: $assetUploadUrl"
+                        # Delete existing asset if present
+                        $existingAsset = $assets | Where-Object { $_.name -eq $fileName }
 
-                        $uploadResponse = Invoke-RestMethod `
-                            -Method Post `
-                            -Uri $assetUploadUrl `
-                            -Headers $headers `
-                            -InFile $filePath `
-                            -ContentType "application/zip"
+                        if ($existingAsset) {
 
-                        Write-Host "Uploaded GitHub asset: $fileName"
-                        if ($uploadResponse.browser_download_url) {
-                            Write-Host "Download URL: $($uploadResponse.browser_download_url)"
+                            Write-Host "Deleting existing asset: $fileName"
+
+                            $deleteUrl = "https://api.github.com/repos/$owner/$repo/releases/assets/$($existingAsset.id)"
+
+                            try {
+                                Invoke-RestMethod `
+                                    -Method Delete `
+                                    -Uri $deleteUrl `
+                                    -Headers $headers
+
+                                Write-Host "Deleted existing asset successfully."
+                            }
+                            catch {
+                                Write-Host "Failed to delete existing asset."
+                                Write-Host $_.Exception.Message
+                            }
                         }
+
+                        Write-Host "Uploading: $fileName"
+
+                        $uploadUrl = "https://uploads.github.com/repos/$owner/$repo/releases/$releaseId/assets?name=$fileName"
+
+                        Invoke-RestMethod `
+                            -Method Post `
+                            -Uri $uploadUrl `
+                            -Headers @{
+                                Authorization = "Bearer $env:GH_TOKEN"
+                                Accept = "application/vnd.github+json"
+                                "Content-Type" = "application/zip"
+                                "User-Agent" = "Jenkins"
+                            } `
+                            -InFile $filePath
+
+                        Write-Host "Uploaded: $fileName"
                     }
+
+                    Write-Host "======================================"
+                    Write-Host "GitHub release publication completed."
+                    Write-Host "======================================"
                 '''
             }
         }
-
         stage('Test Confluence Connection') {
             when {
                 expression { return params.PUBLISH_TO_CONFLUENCE }
