@@ -1,7 +1,7 @@
 import groovy.json.JsonOutput
 
 pipeline {
-    agent { label 'windows' }
+    agent any
 
     options {
         timestamps()
