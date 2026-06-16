@@ -327,136 +327,76 @@ pipeline {
             }
         }
 
-//         stage('Publish to Confluence') {
-//             when {
-//                 expression { return params.PUBLISH_TO_CONFLUENCE }
-//             }
-//             steps {
-//                 powershell '''
-// $ErrorActionPreference = "Stop"
+        stage('Publish to Confluence') {
+            when {
+                expression { return params.PUBLISH_TO_CONFLUENCE }
+            }
+            steps {
+                powershell '''
+        $ErrorActionPreference = "Stop"
 
-// # Validate required values
-// if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
-//     throw "CONFLUENCE_BASE_URL is required."
-// }
+        # --------------------------------------------------
+        # Validate required values
+        # --------------------------------------------------
+        if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
+            throw "CONFLUENCE_BASE_URL is required."
+        }
 
-// if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_SPACE)) {
-//     throw "CONFLUENCE_SPACE_KEY is required."
-// }
+        if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
+            [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
+            throw "Confluence credentials are missing."
+        }
 
-// if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
-//     [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
-//     throw "Confluence credentials are missing."
-// }
+        # Use the existing page ID directly
+        $pageId = "131214"
+        Write-Host "Uploading artifacts to existing Confluence page ID: $pageId"
 
-// # Make the page title unique to avoid common duplicate-title conflicts
-// $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Build $env:BUILD_NUMBER"
+        # --------------------------------------------------
+        # Files to upload
+        # --------------------------------------------------
+        $filesToUpload = @(
+            (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
+            (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
+        )
 
-// $pageBody = "<h1>$env:APP_NAME $env:RELEASE_VERSION</h1>" +
-//             "<p>Automated release from Jenkins.</p>" +
-//             "<ul>" +
-//             "<li><b>Release Notes ZIP:</b> $env:RELEASE_NOTES_ZIP</li>" +
-//             "<li><b>Deployment Binary ZIP:</b> $env:BINARIES_ZIP</li>" +
-//             "</ul>"
+        foreach ($filePath in $filesToUpload) {
+            if (-not (Test-Path $filePath)) {
+                throw "Attachment file not found: $filePath"
+            }
 
-// $payload = @{
-//     type  = "page"
-//     title = $pageTitle
-//     space = @{ key = $env:CONFLUENCE_SPACE }
-//     body  = @{
-//         storage = @{
-//             value          = $pageBody
-//             representation = "storage"
-//         }
-//     }
-// }
+            $fileName = [System.IO.Path]::GetFileName($filePath)
+            Write-Host "Uploading attachment: $fileName"
 
-// if (-not [string]::IsNullOrWhiteSpace($env:CONFLUENCE_PARENT_ID)) {
-//     $payload["ancestors"] = @(@{ id = $env:CONFLUENCE_PARENT_ID })
-// }
+            $safeName = $fileName -replace '[^a-zA-Z0-9._-]', '_'
+            $attachResponseFile = "attach_${safeName}.json"
 
-// $jsonBody = $payload | ConvertTo-Json -Depth 20
-// Set-Content -Path page_payload.json -Value $jsonBody -Encoding UTF8
+            $attachStatus = curl.exe -sS `
+            -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
+            -H "X-Atlassian-Token: nocheck" `
+            -X POST `
+            -F "file=@$filePath" `
+            "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment" `
+            -o $attachResponseFile `
+            -w "%{http_code}"
 
-// Write-Host "Creating Confluence page: $pageTitle"
-// Write-Host "Confluence URL: $env:CONFLUENCE_URL"
-// Write-Host "Space key: $env:CONFLUENCE_SPACE"
+            $attachResponseText = ""
+            if (Test-Path $attachResponseFile) {
+                $attachResponseText = Get-Content $attachResponseFile -Raw
+            }
 
-// $responseFile = "confluence_create_response.json"
-// $statusCode = curl.exe -sS `
-//   -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
-//   -H "Content-Type: application/json" `
-//   -X POST `
-//   --data-binary "@page_payload.json" `
-//   "$env:CONFLUENCE_URL/rest/api/content" `
-//   -o $responseFile `
-//   -w "%{http_code}"
+            Write-Host "Attachment upload status for $fileName: $attachStatus"
+            Write-Host "Attachment upload response for $fileName:"
+            Write-Host $attachResponseText
 
-// if (-not (Test-Path $responseFile)) {
-//     throw "No response file returned from Confluence create page request."
-// }
+            if ($attachStatus -notin @("200","201")) {
+                throw "Attachment upload failed for $fileName with HTTP status $attachStatus"
+            }
+        }
 
-// $responseText = Get-Content $responseFile -Raw
-// Write-Host "Confluence create-page HTTP status: $statusCode"
-// Write-Host "Create page response:"
-// Write-Host $responseText
-
-// if ($statusCode -notin @("200","201")) {
-//     throw "Confluence page creation failed with HTTP status $statusCode. Review the response above."
-// }
-
-// $pageResponse = $responseText | ConvertFrom-Json
-
-// if (-not $pageResponse.id) {
-//     throw "Confluence page creation succeeded technically, but page ID was not returned."
-// }
-
-// $pageId = "$($pageResponse.id)"
-// Write-Host "Created Confluence page ID: $pageId"
-
-// $filesToUpload = @(
-//     (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
-//     (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
-// )
-
-// foreach ($filePath in $filesToUpload) {
-//     if (-not (Test-Path $filePath)) {
-//         throw "Attachment file not found: $filePath"
-//     }
-
-//     $fileName = [System.IO.Path]::GetFileName($filePath)
-//     Write-Host "Uploading attachment: $fileName"
-
-//     $safeName = $fileName -replace '[^a-zA-Z0-9._-]', '_'
-//     $attachResponseFile = "attach_${safeName}.json"
-
-//     $attachStatus = curl.exe -sS `
-//       -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
-//       -H "X-Atlassian-Token: nocheck" `
-//       -X POST `
-//       -F "file=@$filePath" `
-//       "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment" `
-//       -o $attachResponseFile `
-//       -w "%{http_code}"
-
-//     $attachResponseText = ""
-//     if (Test-Path $attachResponseFile) {
-//         $attachResponseText = Get-Content $attachResponseFile -Raw
-//     }
-
-//     Write-Host "Attachment upload status for $fileName: $attachStatus"
-//     Write-Host "Attachment upload response for $fileName:"
-//     Write-Host $attachResponseText
-
-//     if ($attachStatus -notin @("200","201")) {
-//         throw "Attachment upload failed for $fileName with HTTP status $attachStatus"
-//     }
-// }
-
-// Write-Host "Confluence publish completed successfully"
-// '''
-//             }
-//         }
+        Write-Host "Confluence artifact upload completed successfully"
+        '''
+            }
+        }
     }
 
     post {
