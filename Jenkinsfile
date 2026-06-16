@@ -227,17 +227,41 @@ pipeline {
          *******************************************************************************************/
         stage('Process release note') {
             steps {
+
                 unstash 'RELEASE_NOTE_FILE'
 
                 powershell '''
-                    New-Item -ItemType Directory `
+                    $ErrorActionPreference = "Stop"
+
+                    Write-Host "Workspace:"
+                    Write-Host $env:WORKSPACE
+
+                    Get-ChildItem -Path $env:WORKSPACE -Recurse
+
+                    New-Item `
+                        -ItemType Directory `
                         -Force `
                         -Path $env:RELEASE_NOTES_DIR | Out-Null
 
+                    $pdf = Get-ChildItem `
+                        -Path $env:WORKSPACE `
+                        -Recurse `
+                        -Filter *.pdf `
+                        | Select-Object -First 1
+
+                    if (-not $pdf) {
+                        throw "No uploaded PDF found after unstash."
+                    }
+
                     Copy-Item `
-                        RELEASE_NOTE_FILE `
-                        $env:RELEASE_NOTES_DIR `
+                        $pdf.FullName `
+                        -Destination $env:RELEASE_NOTES_DIR `
                         -Force
+
+                    Write-Host "Release note copied:"
+                    Write-Host $pdf.Name
+
+                    Get-ChildItem $env:RELEASE_NOTES_DIR
                 '''
             }
         }
