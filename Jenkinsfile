@@ -20,7 +20,7 @@ pipeline {
 
         booleanParam(name: 'PUBLISH_EMAIL', defaultValue: true)
 
-        string(name: 'RELEASE_NOTE_PATH', defaultValue: 'C:\\temp\\release.pdf', description: 'Local file path on Jenkins machine')
+        string(name: 'RELEASE_NOTE_PATH', defaultValue: 'C:\\Users\\I17270834\\Downloads\\Release_Notes_v1.0.0.pdf', description: 'Local file path on Jenkins machine')
 
         string(name: 'CONFLUENCE_BASE_URL', defaultValue: 'https://projectworkuser.atlassian.net/wiki')
         string(name: 'CONFLUENCE_SPACE_KEY', defaultValue: 'DEMO')
