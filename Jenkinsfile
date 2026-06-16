@@ -265,26 +265,39 @@ python app.py
                 expression { return params.PUBLISH_EMAIL }
             }
             steps {
-                emailext(
-                    subject: "${env.EMAIL_SUBJECT}",
-                    to: "${env.EMAIL_TO_LIST}",
-                    cc: "${env.EMAIL_CC_LIST}",
-                    bcc: "${env.EMAIL_BCC_LIST}",
-                    from: "${env.EMAIL_FROM_ADDR}",
-                    replyTo: "${env.EMAIL_REPLY_TO}",
-                    mimeType: 'text/html',
-                    attachmentsPattern: "${env.DIST_DIR}/*.zip",
-                    body: """
-                        <p>Hello Team,</p>
-                        <p>The release package for <strong>${params.APP_NAME}</strong> version <strong>${params.RELEASE_VERSION}</strong> has been generated.</p>
-                        <p><strong>Attached files</strong></p>
-                        <ul>
-                            <li>${env.RELEASE_NOTES_ZIP}</li>
-                            <li>${env.BINARIES_ZIP}</li>
-                        </ul>
-                        <p>Regards,<br/>Jenkins</p>
-                    """
-                )
+                script {
+                    // Merge TO + CC + BCC into one recipient list (compatible with all Jenkins versions)
+                    def recipients = [
+                        env.EMAIL_TO_LIST,
+                        env.EMAIL_CC_LIST,
+                        env.EMAIL_BCC_LIST
+                    ]
+                    .findAll { it?.trim() }
+                    .join(',')
+
+                    emailext(
+                        subject: "${env.EMAIL_SUBJECT}",
+                        to: recipients,
+                        from: "${env.EMAIL_FROM_ADDR}",
+                        replyTo: "${env.EMAIL_REPLY_TO}",
+                        mimeType: 'text/html',
+                        attachmentsPattern: "${env.DIST_DIR}/*.zip",
+                        body: """
+                            <p>Hello Team,</p>
+
+                            <p>The release package for <strong>${params.APP_NAME}</strong>
+                            version <strong>${params.RELEASE_VERSION}</strong> has been generated.</p>
+
+                            <p><strong>Attached files</strong></p>
+                            <ul>
+                                <li>${env.RELEASE_NOTES_ZIP}</li>
+                                <li>${env.BINARIES_ZIP}</li>
+                            </ul>
+
+                            <p>Regards,<br/>Jenkins</p>
+                        """
+                    )
+                }
             }
         }
 
