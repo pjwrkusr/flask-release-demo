@@ -1,5 +1,3 @@
-import groovy.json.JsonOutput
-
 pipeline {
     agent any
 
@@ -7,6 +5,7 @@ pipeline {
         timestamps()
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '20'))
+        skipDefaultCheckout(true)
     }
 
     parameters {
@@ -89,7 +88,7 @@ pipeline {
         // ------------------------------------------------------------
         // Confluence environment variables
         // Credential type: Username with password
-        // Credential ID: confluence-username-token
+        // Credential ID: confluence-projectwork-token
         // Creates:
         //   CONFLUENCE_CREDS_USR
         //   CONFLUENCE_CREDS_PSW
@@ -111,9 +110,8 @@ pipeline {
 
     stages {
 
-        stage('Clean workspace') {
+        stage('Checkout source') {
             steps {
-                deleteDir()
                 checkout scm
             }
         }
@@ -128,6 +126,7 @@ pipeline {
                     New-Item -ItemType Directory -Force -Path $env:DIST_DIR          | Out-Null
 
                     Write-Host "Prepared workspace folders."
+                    Write-Host "Workspace: $env:WORKSPACE"
                 '''
             }
         }
@@ -135,7 +134,6 @@ pipeline {
         stage('Collect and validate release note PDFs') {
             steps {
                 script {
-                    // Capture uploaded file paths from Jenkins parameters (correct way)
                     def uploadedFiles = [
                         params.RELEASE_NOTE_1,
                         params.RELEASE_NOTE_2,
@@ -145,45 +143,65 @@ pipeline {
                         params.RELEASE_NOTE_6,
                         params.RELEASE_NOTE_7,
                         params.RELEASE_NOTE_8
-                    ].findAll { it != null && it.trim() != "" }
+                    ].findAll { it != null && it.toString().trim() != '' }
 
                     echo "Raw uploaded parameters: ${uploadedFiles}"
 
-                    if (uploadedFiles.size() == 0) {
-                        error("Jenkins did not receive any uploaded release note files.")
+                    if (uploadedFiles.isEmpty()) {
+                        error("""Jenkins did not receive any uploaded release note files.
+
+Possible reasons:
+1. The job parameters were not refreshed yet after updating the Jenkinsfile.
+2. The build was not triggered with file uploads.
+3. The Jenkins file-parameter handling on this job is not exposing the uploaded files.
+
+Recommended action:
+- Run the pipeline once after saving the Jenkinsfile.
+- Then run again using 'Build with Parameters' and upload the PDFs.
+""")
                     }
 
-                    // Pass into PowerShell as a joined string
-                    def fileList = uploadedFiles.join(',')
+                    def psArray = uploadedFiles.collect { "'${it.toString().replace("'", "''")}'" }.join(',')
 
                     powershell """
                         \$ErrorActionPreference = "Stop"
 
-                        \$files = "${fileList}".Split(',')
-
+                        \$files = @(${psArray})
+                        \$workspace = \$env:WORKSPACE
                         \$count = 0
 
-                        foreach (\$file in \$files) {
-                            if (Test-Path \$file) {
-                                \$ext = [System.IO.Path]::GetExtension(\$file)
+                        foreach (\$item in \$files) {
+                            \$candidate1 = \$item
+                            \$candidate2 = Join-Path \$workspace \$item
 
-                                if (\$ext -ne ".pdf" -and \$ext -ne ".PDF") {
-                                    throw "Invalid file type: \$file"
-                                }
-
-                                Copy-Item -Path \$file -Destination "$env:RELEASE_NOTES_DIR" -Force
-                                Write-Host "Copied: \$file"
-                                \$count++
-                            } else {
-                                Write-Warning "File path not found: \$file"
+                            \$src = \$null
+                            if (Test-Path \$candidate1) {
+                                \$src = \$candidate1
+                            } elseif (Test-Path \$candidate2) {
+                                \$src = \$candidate2
                             }
+
+                            if (-not \$src) {
+                                Write-Warning "Uploaded file not found: \$item"
+                                continue
+                            }
+
+                            \$ext = [System.IO.Path]::GetExtension(\$src)
+                            if (\$ext -notin @('.pdf', '.PDF')) {
+                                throw "Uploaded file is not a PDF: \$src"
+                            }
+
+                            Copy-Item -Path \$src -Destination \$env:RELEASE_NOTES_DIR -Force
+                            Write-Host "Copied PDF: \$src"
+                            \$count++
                         }
 
                         if (\$count -eq 0) {
-                            throw "PDF files were selected but not found in workspace."
+                            throw "Release-note parameters were present, but no uploaded PDF files were found on disk."
                         }
 
-                        Write-Host "Successfully processed \$count release note PDFs."
+                        Write-Host "Successfully processed \$count release note PDF(s)."
+                        Get-ChildItem -Path \$env:RELEASE_NOTES_DIR | Format-Table Name, Length, LastWriteTime -AutoSize
                     """
                 }
             }
@@ -191,41 +209,56 @@ pipeline {
 
         stage('Collect deployment binary or package Flask demo') {
             steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
+                script {
+                    def deploymentParam = params.DEPLOYMENT_BINARY ?: ''
 
-                    $deploymentProvided = $false
-                    $deploymentBinary = $env:DEPLOYMENT_BINARY
+                    powershell """
+                        \$ErrorActionPreference = "Stop"
 
-                    if (-not [string]::IsNullOrWhiteSpace($deploymentBinary) -and (Test-Path $deploymentBinary)) {
-                        Copy-Item -Path $deploymentBinary -Destination $env:BUILD_INPUT_DIR -Force
-                        $deploymentProvided = $true
-                        Write-Host "Using uploaded deployment binary: $deploymentBinary"
-                    }
+                        \$deploymentItem = '${deploymentParam}'.Trim()
+                        \$workspace = \$env:WORKSPACE
+                        \$deploymentProvided = \$false
+                        \$deploymentPath = \$null
 
-                    if (-not $deploymentProvided) {
-                        Write-Host "No deployment binary uploaded. Packaging Flask demo source."
+                        if (-not [string]::IsNullOrWhiteSpace(\$deploymentItem)) {
+                            \$candidate1 = \$deploymentItem
+                            \$candidate2 = Join-Path \$workspace \$deploymentItem
 
-                        # Create Python virtual environment (optional for demo validation)
-                        python -m venv .venv
-                        .\\.venv\\Scripts\\python.exe -m pip install --upgrade pip
-                        .\\.venv\\Scripts\\pip.exe install -r requirements.txt
-
-                        $appTarget = Join-Path $env:BUILD_INPUT_DIR $env:APP_NAME
-                        New-Item -ItemType Directory -Force -Path $appTarget | Out-Null
-
-                        Copy-Item -Path "app.py" -Destination $appTarget -Force
-                        Copy-Item -Path "requirements.txt" -Destination $appTarget -Force
-
-                        if (Test-Path "templates") {
-                            Copy-Item -Path "templates" -Destination $appTarget -Recurse -Force
+                            if (Test-Path \$candidate1) {
+                                \$deploymentPath = \$candidate1
+                            } elseif (Test-Path \$candidate2) {
+                                \$deploymentPath = \$candidate2
+                            }
                         }
 
-                        if (Test-Path "static") {
-                            Copy-Item -Path "static" -Destination $appTarget -Recurse -Force
+                        if (\$deploymentPath) {
+                            Copy-Item -Path \$deploymentPath -Destination \$env:BUILD_INPUT_DIR -Force
+                            \$deploymentProvided = \$true
+                            Write-Host "Using uploaded deployment binary: \$deploymentPath"
                         }
 
-                        $runScript = @"
+                        if (-not \$deploymentProvided) {
+                            Write-Host "No deployment binary uploaded. Packaging Flask demo source."
+
+                            python -m venv .venv
+                            .\\.venv\\Scripts\\python.exe -m pip install --upgrade pip
+                            .\\.venv\\Scripts\\pip.exe install -r requirements.txt
+
+                            \$appTarget = Join-Path \$env:BUILD_INPUT_DIR \$env:APP_NAME
+                            New-Item -ItemType Directory -Force -Path \$appTarget | Out-Null
+
+                            Copy-Item -Path "app.py" -Destination \$appTarget -Force
+                            Copy-Item -Path "requirements.txt" -Destination \$appTarget -Force
+
+                            if (Test-Path "templates") {
+                                Copy-Item -Path "templates" -Destination \$appTarget -Recurse -Force
+                            }
+
+                            if (Test-Path "static") {
+                                Copy-Item -Path "static" -Destination \$appTarget -Recurse -Force
+                            }
+
+                            \$runScript = @"
 @echo off
 python -m venv .venv
 call .venv\\Scripts\\activate.bat
@@ -235,10 +268,13 @@ set APP_VERSION=%RELEASE_VERSION%
 python app.py
 "@
 
-                        Set-Content -Path (Join-Path $appTarget "run.bat") -Value $runScript -Encoding ASCII
-                        Write-Host "Prepared demo Flask deployment package."
-                    }
-                '''
+                            Set-Content -Path (Join-Path \$appTarget "run.bat") -Value \$runScript -Encoding ASCII
+                            Write-Host "Prepared demo Flask deployment package."
+                        }
+
+                        Get-ChildItem -Path \$env:BUILD_INPUT_DIR | Format-Table Name, Length, LastWriteTime -AutoSize
+                    """
+                }
             }
         }
 
@@ -260,7 +296,7 @@ python app.py
 
                     Compress-Archive -Path "$env:RELEASE_NOTES_DIR\\*.pdf" -DestinationPath $releaseNotesZipPath -Force
 
-                    $binaryItems = Get-ChildItem -Path $env:BUILD_INPUT_DIR
+                    $binaryItems = Get-ChildItem -Path $env:BUILD_INPUT_DIR -ErrorAction SilentlyContinue
                     if (-not $binaryItems) {
                         throw "No deployment content found in $env:BUILD_INPUT_DIR"
                     }
@@ -279,7 +315,6 @@ python app.py
             }
             steps {
                 script {
-                    // Merge TO + CC + BCC into one recipient list (compatible with all Jenkins versions)
                     def recipients = [
                         env.EMAIL_TO_LIST,
                         env.EMAIL_CC_LIST,
@@ -381,7 +416,6 @@ python app.py
                     $pageId = "$($pageResponse.id)"
                     Write-Host "Created Confluence page ID: $pageId"
 
-                    # Upload attachments using .NET multipart form-data
                     Add-Type -AssemblyName System.Net.Http
 
                     $attachmentHeaders = New-Object "System.Net.Http.Headers.AuthenticationHeaderValue"("Basic", $basicToken)
@@ -468,7 +502,6 @@ python app.py
 
                     Write-Host "Using GitHub release ID: $releaseId"
 
-                    # Get current assets
                     $assets = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/$releaseId/assets" -Headers $headers
 
                     $targetAssetNames = @(
