@@ -12,7 +12,7 @@ pipeline {
         string(name: 'APP_NAME', defaultValue: 'flask-release-demo')
         string(name: 'RELEASE_VERSION', defaultValue: '1.0.0')
 
-        string(name: 'EMAIL_TO', defaultValue: 'devopsuser8413@gmail.com')
+        string(name: 'EMAIL_TO', defaultValue: 'projectworkuser@gmail.com')
         string(name: 'EMAIL_CC', defaultValue: '')
         string(name: 'EMAIL_BCC', defaultValue: '')
         string(name: 'EMAIL_FROM', defaultValue: 'projectworkuser@gmail.com')
