@@ -334,6 +334,9 @@ pipeline {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
+                    # -------------------------------
+                    # Validate required values
+                    # -------------------------------
                     if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
                         throw "CONFLUENCE_BASE_URL is required."
                     }
@@ -342,22 +345,29 @@ pipeline {
                         throw "CONFLUENCE_SPACE_KEY is required."
                     }
 
+                    if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
+                        throw "Confluence credentials are missing."
+                    }
+
+                    # -------------------------------
+                    # Build Confluence page
+                    # -------------------------------
                     $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
-                    $pageBody  = @"
-<h1>$env:APP_NAME $env:RELEASE_VERSION</h1>
-<p>Automated release publication from Jenkins.</p>
-<ul>
-  <li>Release notes ZIP: $env:RELEASE_NOTES_ZIP</li>
-  <li>Deployment binaries ZIP: $env:BINARIES_ZIP</li>
-</ul>
-"@
+
+                    $pageBody = @"
+        <h1>$env:APP_NAME $env:RELEASE_VERSION</h1>
+        <p>Automated release from Jenkins.</p>
+
+        <ul>
+        <li><b>Release Notes ZIP:</b> $env:RELEASE_NOTES_ZIP</li>
+        <li><b>Deployment Binary ZIP:</b> $env:BINARIES_ZIP</li>
+        </ul>
+        "@
 
                     $payload = @{
                         type  = "page"
                         title = $pageTitle
-                        space = @{
-                            key = $env:CONFLUENCE_SPACE
-                        }
+                        space = @{ key = $env:CONFLUENCE_SPACE }
                         body  = @{
                             storage = @{
                                 value          = $pageBody
@@ -366,6 +376,7 @@ pipeline {
                         }
                     }
 
+                    # Add parent page (optional)
                     if (-not [string]::IsNullOrWhiteSpace($env:CONFLUENCE_PARENT_ID)) {
                         $payload["ancestors"] = @(
                             @{ id = $env:CONFLUENCE_PARENT_ID }
@@ -373,29 +384,43 @@ pipeline {
                     }
 
                     $jsonBody = $payload | ConvertTo-Json -Depth 20
+
+                    # -------------------------------
+                    # Auth (API token)
+                    # -------------------------------
                     $pair = "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW"
                     $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
-                    $basicToken = [Convert]::ToBase64String($bytes)
+                    $basicToken = [System.Convert]::ToBase64String($bytes)
 
                     $headers = @{
                         "Authorization" = "Basic $basicToken"
                         "Content-Type"  = "application/json"
                     }
 
-                    $pageResponse = Invoke-RestMethod -Method Post `
+                    # -------------------------------
+                    # Create page
+                    # -------------------------------
+                    $pageResponse = Invoke-RestMethod `
+                        -Method Post `
                         -Uri "$env:CONFLUENCE_URL/rest/api/content" `
                         -Headers $headers `
                         -Body $jsonBody
 
                     if (-not $pageResponse.id) {
-                        throw "Confluence page creation failed. Page ID not returned."
+                        throw "Confluence page creation failed."
                     }
 
                     $pageId = "$($pageResponse.id)"
-                    Write-Host "Created Confluence page ID: $pageId"
+                    Write-Host "✅ Created Confluence page ID: $pageId"
 
+                    # -------------------------------
+                    # Upload attachments
+                    # -------------------------------
                     Add-Type -AssemblyName System.Net.Http
-                    $attachmentHeaders = New-Object "System.Net.Http.Headers.AuthenticationHeaderValue"("Basic", $basicToken)
+
+                    $client = New-Object System.Net.Http.HttpClient
+                    $client.DefaultRequestHeaders.Add("Authorization", "Basic $basicToken")
+                    $client.DefaultRequestHeaders.Add("X-Atlassian-Token", "nocheck")
 
                     $filesToUpload = @(
                         (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
@@ -403,32 +428,41 @@ pipeline {
                     )
 
                     foreach ($filePath in $filesToUpload) {
+
                         if (-not (Test-Path $filePath)) {
-                            throw "Confluence attachment file not found: $filePath"
+                            throw "File not found: $filePath"
                         }
 
-                        $client = New-Object System.Net.Http.HttpClient
-                        $client.DefaultRequestHeaders.Authorization = $attachmentHeaders
-                        $client.DefaultRequestHeaders.Add("X-Atlassian-Token", "nocheck")
+                        Write-Host "Uploading to Confluence: $filePath"
 
                         $multipart = New-Object System.Net.Http.MultipartFormDataContent
+
                         $fileBytes = [System.IO.File]::ReadAllBytes($filePath)
-                        $fileContent = New-Object System.Net.Http.ByteArrayContent($fileBytes)
+
+                        # ✅ CRITICAL FIX
+                        $fileContent = New-Object System.Net.Http.ByteArrayContent (,$fileBytes)
+
                         $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/octet-stream")
 
                         $fileName = [System.IO.Path]::GetFileName($filePath)
+
                         $multipart.Add($fileContent, "file", $fileName)
 
-                        $uploadResponse = $client.PostAsync("$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment", $multipart).Result
+                        $uploadUrl = "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment"
 
-                        if (-not $uploadResponse.IsSuccessStatusCode) {
-                            $responseText = $uploadResponse.Content.ReadAsStringAsync().Result
-                            throw "Failed to upload attachment to Confluence: $fileName. Status: $($uploadResponse.StatusCode). Response: $responseText"
+                        $response = $client.PostAsync($uploadUrl, $multipart).Result
+
+                        if (-not $response.IsSuccessStatusCode) {
+                            $err = $response.Content.ReadAsStringAsync().Result
+                            throw "❌ Upload failed: $fileName → $($response.StatusCode) → $err"
                         }
 
-                        Write-Host "Uploaded Confluence attachment: $fileName"
-                        $client.Dispose()
+                        Write-Host "✅ Uploaded: $fileName"
                     }
+
+                    $client.Dispose()
+
+                    Write-Host "✅ Confluence publish completed."
                 '''
             }
         }
