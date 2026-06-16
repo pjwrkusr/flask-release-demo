@@ -377,11 +377,7 @@ pipeline {
             }
         }
 
-        stage('Find Confluence Page') {
-            when {
-                expression { return params.PUBLISH_TO_CONFLUENCE }
-            }
-
+        stage('Find Flask Page') {
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
@@ -396,24 +392,19 @@ pipeline {
                         Accept = "application/json"
                     }
 
-                    $searchUrl = "$env:CONFLUENCE_URL/rest/api/content?spaceKey=$env:CONFLUENCE_SPACE"
+                    $title = "Flask"
 
-                    Write-Host "Searching pages..."
+                    $url = "$env:CONFLUENCE_URL/rest/api/content?title=$title&spaceKey=DEMO&expand=version"
+
+                    Write-Host "URL:"
+                    Write-Host $url
 
                     $result = Invoke-RestMethod `
                         -Method Get `
-                        -Uri $searchUrl `
+                        -Uri $url `
                         -Headers $headers
 
-                    Write-Host "======================================"
-
-                    foreach ($page in $result.results) {
-                        Write-Host "Page ID : $($page.id)"
-                        Write-Host "Title   : $($page.title)"
-                        Write-Host "--------------------------------------"
-                    }
-
-                    Write-Host "======================================"
+                    $result | ConvertTo-Json -Depth 20
                 '''
             }
         }
