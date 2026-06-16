@@ -145,7 +145,7 @@ pipeline {
                     if (-not $rnFiles) {
                         throw "No files found in '$env:RELEASE_NOTES_DIR'. Ensure the PDF was copied successfully."
                     }
-                    Compress-Archive -Path "$env:RELEASE_NOTES_DIR\*" -DestinationPath $rnZip -Force
+                    Compress-Archive -Path (Join-Path $env:RELEASE_NOTES_DIR '*') -DestinationPath $rnZip -Force
                     Write-Host "Created release notes ZIP: $rnZip"
 
                     # --- Deployment binaries ZIP ---
@@ -156,7 +156,7 @@ pipeline {
                         "Demo binary placeholder for $env:APP_NAME $env:RELEASE_VERSION" |
                             Out-File (Join-Path $env:BUILD_INPUT_DIR "placeholder.txt") -Encoding utf8
                     }
-                    Compress-Archive -Path "$env:BUILD_INPUT_DIR\*" -DestinationPath $binZip -Force
+                    Compress-Archive -Path (Join-Path $env:BUILD_INPUT_DIR '*') -DestinationPath $binZip -Force
                     Write-Host "Created deployment binaries ZIP: $binZip"
 
                     Write-Host "`nDist folder contents:"
