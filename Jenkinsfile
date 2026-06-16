@@ -1,46 +1,49 @@
 pipeline {
-    agent any
+    agent { label 'windows' }
 
     options {
         timestamps()
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '20'))
         skipDefaultCheckout(true)
-        timeout(time: 30, unit: 'MINUTES')
     }
 
     parameters {
-        string(name: 'APP_NAME',         defaultValue: 'flask-release-demo', description: 'Application name')
-        string(name: 'RELEASE_VERSION',  defaultValue: '1.0.0',              description: 'Release version (e.g. 1.0.0)')
+        string(name: 'APP_NAME', defaultValue: 'flask-release-demo', description: 'Application name')
+        string(name: 'RELEASE_VERSION', defaultValue: '1.0.0', description: 'Release version')
 
-        string(name: 'EMAIL_TO',         defaultValue: 'projectworkuser@gmail.com', description: 'Primary recipients (comma-separated)')
-        string(name: 'EMAIL_CC',         defaultValue: '',                          description: 'CC recipients (comma-separated)')
-        string(name: 'EMAIL_BCC',        defaultValue: '',                          description: 'BCC recipients (comma-separated)')
-        string(name: 'EMAIL_FROM',       defaultValue: 'projectworkuser@gmail.com', description: 'From address')
-        string(name: 'EMAIL_REPLY_TO',   defaultValue: 'projectworkuser@gmail.com', description: 'Reply-To address')
+        string(name: 'EMAIL_TO', defaultValue: 'projectworkuser@gmail.com', description: 'Primary recipients (comma-separated)')
+        string(name: 'EMAIL_CC', defaultValue: '', description: 'CC recipients (comma-separated)')
+        string(name: 'EMAIL_BCC', defaultValue: '', description: 'BCC recipients (comma-separated)')
+        string(name: 'EMAIL_FROM', defaultValue: 'projectworkuser@gmail.com', description: 'From address')
+        string(name: 'EMAIL_REPLY_TO', defaultValue: 'projectworkuser@gmail.com', description: 'Reply-To address')
 
-        booleanParam(name: 'PUBLISH_EMAIL',        defaultValue: true, description: 'Send email with ZIP attachments')
-        booleanParam(name: 'PUBLISH_TO_GITHUB',    defaultValue: true, description: 'Create/update GitHub Release and upload ZIPs')
+        booleanParam(name: 'PUBLISH_EMAIL', defaultValue: true, description: 'Send email with ZIP attachments')
+        booleanParam(name: 'PUBLISH_TO_GITHUB', defaultValue: true, description: 'Create/update GitHub Release and upload ZIPs')
         booleanParam(name: 'PUBLISH_TO_CONFLUENCE', defaultValue: true, description: 'Create Confluence page and attach ZIPs')
 
         string(
             name: 'RELEASE_NOTE_PATH',
             defaultValue: 'C:\\Users\\I17270834\\Downloads\\Release_Notes_v1.0.0.pdf',
-            description: 'Absolute path to the release note PDF on the Jenkins agent'
+            description: 'Local file path on Jenkins machine'
         )
 
-        string(name: 'CONFLUENCE_BASE_URL',       defaultValue: 'https://projectworkuser.atlassian.net/wiki', description: 'Confluence base URL (no trailing slash)')
-        string(name: 'CONFLUENCE_SPACE_KEY',      defaultValue: 'DEMO',   description: 'Confluence space key')
-        string(name: 'CONFLUENCE_PARENT_PAGE_ID', defaultValue: '131214', description: 'Confluence parent page ID (leave blank to omit)')
+        string(
+            name: 'CONFLUENCE_BASE_URL',
+            defaultValue: 'https://projectworkuser.atlassian.net/wiki',
+            description: 'Confluence base URL'
+        )
+        string(name: 'CONFLUENCE_SPACE_KEY', defaultValue: 'DEMO', description: 'Confluence space key')
+        string(name: 'CONFLUENCE_PARENT_PAGE_ID', defaultValue: '131214', description: 'Confluence parent page ID (optional)')
 
-        string(name: 'GITHUB_OWNER', defaultValue: 'pjwrkusr',                  description: 'GitHub owner / org')
-        string(name: 'GITHUB_REPO',  defaultValue: 'flask-demo-publish-docs',   description: 'GitHub repository name')
+        string(name: 'GITHUB_OWNER', defaultValue: 'pjwrkusr', description: 'GitHub owner')
+        string(name: 'GITHUB_REPO', defaultValue: 'flask-demo-publish-docs', description: 'GitHub repository')
     }
 
     environment {
-        RELEASE_NOTES_DIR = 'release-notes'
-        BUILD_INPUT_DIR   = 'build-input'
-        DIST_DIR          = 'dist'
+        RELEASE_NOTES_DIR = "release-notes"
+        BUILD_INPUT_DIR   = "build-input"
+        DIST_DIR          = "dist"
 
         RELEASE_NOTES_ZIP = "${params.APP_NAME}-${params.RELEASE_VERSION}-release-notes.zip"
         BINARIES_ZIP      = "${params.APP_NAME}-${params.RELEASE_VERSION}-deployment-binaries.zip"
@@ -58,166 +61,135 @@ pipeline {
         GH_OWNER = "${params.GITHUB_OWNER}"
         GH_REPO  = "${params.GITHUB_REPO}"
 
-        // Credential bindings:
-        //   confluence-projectwork-token  → Username with password  → CONFLUENCE_CREDS_USR / CONFLUENCE_CREDS_PSW
-        //   github-token-release          → Secret text             → GH_TOKEN
+        // Credentials
+        // confluence-projectwork-token = Username with password (email + API token)
+        // github-token-release         = Secret text
         CONFLUENCE_CREDS = credentials('confluence-projectwork-token')
         GH_TOKEN         = credentials('github-token-release')
     }
 
     stages {
 
-        // ─────────────────────────────────────────────────────────────────
-        // 1. SOURCE CHECKOUT
-        // ─────────────────────────────────────────────────────────────────
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        // 2. PREPARE WORKSPACE FOLDERS
-        // ─────────────────────────────────────────────────────────────────
         stage('Prepare folders') {
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    @($env:RELEASE_NOTES_DIR, $env:BUILD_INPUT_DIR, $env:DIST_DIR) | ForEach-Object {
-                        New-Item -ItemType Directory -Force -Path $_ | Out-Null
-                        Write-Host "Ensured directory: $_"
-                    }
+                    New-Item -ItemType Directory -Force -Path $env:RELEASE_NOTES_DIR | Out-Null
+                    New-Item -ItemType Directory -Force -Path $env:BUILD_INPUT_DIR   | Out-Null
+                    New-Item -ItemType Directory -Force -Path $env:DIST_DIR          | Out-Null
+
+                    Write-Host "Prepared folders:"
+                    Write-Host " - $env:RELEASE_NOTES_DIR"
+                    Write-Host " - $env:BUILD_INPUT_DIR"
+                    Write-Host " - $env:DIST_DIR"
                 '''
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        // 3. VALIDATE & COPY RELEASE NOTE PDF
-        // ─────────────────────────────────────────────────────────────────
         stage('Process release note') {
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    $file = $env:RELEASE_NOTE_PATH
+                    $file = "$env:RELEASE_NOTE_PATH"
 
                     if ([string]::IsNullOrWhiteSpace($file)) {
-                        throw "RELEASE_NOTE_PATH parameter is empty."
+                        throw "RELEASE_NOTE_PATH is empty."
                     }
 
-                    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-                        throw "Release note file not found: $file"
+                    if (-not (Test-Path $file)) {
+                        throw "File not found: $file"
                     }
 
-                    $ext = [System.IO.Path]::GetExtension($file).ToLower()
-                    if ($ext -ne ".pdf") {
-                        throw "Release note must be a PDF file. Got: $ext"
+                    $ext = [System.IO.Path]::GetExtension($file)
+                    if ($ext -notin @(".pdf", ".PDF")) {
+                        throw "File must be PDF: $file"
                     }
 
-                    Copy-Item -LiteralPath $file -Destination $env:RELEASE_NOTES_DIR -Force
-                    Write-Host "Copied release note PDF to '$env:RELEASE_NOTES_DIR'."
+                    Copy-Item $file -Destination $env:RELEASE_NOTES_DIR -Force
 
+                    Write-Host "Copied release note: $file"
                     Get-ChildItem $env:RELEASE_NOTES_DIR | Format-Table Name, Length, LastWriteTime -AutoSize
                 '''
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        // 4. CREATE ZIP ARCHIVES
-        // ─────────────────────────────────────────────────────────────────
         stage('Create ZIPs') {
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    $rnZip  = Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP
-                    $binZip = Join-Path $env:DIST_DIR $env:BINARIES_ZIP
+                    $rn  = Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP
+                    $bin = Join-Path $env:DIST_DIR $env:BINARIES_ZIP
 
-                    # Remove stale ZIPs if present
-                    @($rnZip, $binZip) | Where-Object { Test-Path $_ } | ForEach-Object {
-                        Remove-Item $_ -Force
-                        Write-Host "Removed stale ZIP: $_"
+                    if (Test-Path $rn)  { Remove-Item $rn -Force }
+                    if (Test-Path $bin) { Remove-Item $bin -Force }
+
+                    $releaseItems = Get-ChildItem -Path $env:RELEASE_NOTES_DIR -File -ErrorAction SilentlyContinue
+                    if (-not $releaseItems) {
+                        throw "No files found in release notes directory."
                     }
 
-                    # --- Release notes ZIP ---
-                    $rnFiles = Get-ChildItem -Path $env:RELEASE_NOTES_DIR -File -ErrorAction SilentlyContinue
-                    if (-not $rnFiles) {
-                        throw "No files found in '$env:RELEASE_NOTES_DIR'. Ensure the PDF was copied successfully."
-                    }
-                    Compress-Archive -Path (Join-Path $env:RELEASE_NOTES_DIR '*') -DestinationPath $rnZip -Force
-                    Write-Host "Created release notes ZIP: $rnZip"
+                    Compress-Archive -Path "$env:RELEASE_NOTES_DIR\\*" -DestinationPath $rn -Force
 
-                    # --- Deployment binaries ZIP ---
                     if (Test-Path "app.py") {
-                        Copy-Item "app.py" $env:BUILD_INPUT_DIR -Force
+                        Copy-Item app.py $env:BUILD_INPUT_DIR -Force
                     } else {
-                        Write-Host "app.py not found — writing placeholder binary."
-                        "Demo binary placeholder for $env:APP_NAME $env:RELEASE_VERSION" |
-                            Out-File (Join-Path $env:BUILD_INPUT_DIR "placeholder.txt") -Encoding utf8
+                        "Demo binary placeholder" | Out-File (Join-Path $env:BUILD_INPUT_DIR "placeholder.txt") -Encoding utf8
                     }
-                    Compress-Archive -Path (Join-Path $env:BUILD_INPUT_DIR '*') -DestinationPath $binZip -Force
-                    Write-Host "Created deployment binaries ZIP: $binZip"
 
-                    Write-Host "`nDist folder contents:"
+                    Compress-Archive -Path "$env:BUILD_INPUT_DIR\\*" -DestinationPath $bin -Force
+
+                    Write-Host "Created ZIPs:"
                     Get-ChildItem $env:DIST_DIR | Format-Table Name, Length, LastWriteTime -AutoSize
                 '''
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        // 5. SEND EMAIL
-        // ─────────────────────────────────────────────────────────────────
         stage('Send email') {
             when {
                 expression { return params.PUBLISH_EMAIL }
             }
             steps {
                 script {
-                    // Build a clean recipient list; skip blank entries
-                    def toList = env.EMAIL_TO_LIST?.trim()
-                    if (!toList) {
-                        error("EMAIL_TO is required when PUBLISH_EMAIL is enabled.")
-                    }
+                    def recipients = [
+                        env.EMAIL_TO_LIST,
+                        env.EMAIL_CC_LIST,
+                        env.EMAIL_BCC_LIST
+                    ].findAll { it?.trim() }.join(',')
 
-                    def ccList  = env.EMAIL_CC_LIST?.trim()  ?: ''
-                    def bccList = env.EMAIL_BCC_LIST?.trim() ?: ''
-
-                    echo "Email  To : ${toList}"
-                    echo "Email  CC : ${ccList ?: '(none)'}"
-                    echo "Email BCC : ${bccList ?: '(none)'}"
+                    echo "Email recipients: ${recipients}"
+                    echo "Attachments path: ${env.DIST_DIR}/*.zip"
 
                     emailext(
-                        to:      toList,
-                        cc:      ccList,
-                        bcc:     bccList,
-                        from:    env.EMAIL_FROM_ADDR,
-                        replyTo: env.EMAIL_REPLY_TO,
-                        subject: "[Release] ${params.APP_NAME} v${params.RELEASE_VERSION}",
+                        to: recipients,
+                        from: "${env.EMAIL_FROM_ADDR}",
+                        replyTo: "${env.EMAIL_REPLY_TO}",
+                        subject: "Release ${params.RELEASE_VERSION}",
                         mimeType: 'text/html',
                         attachmentsPattern: "${env.DIST_DIR}/*.zip",
                         body: """
                             <p>Hello,</p>
-                            <p>Release <strong>${params.APP_NAME} v${params.RELEASE_VERSION}</strong>
-                               has been generated and published.</p>
-                            <p>The following ZIP files are attached to this email:</p>
+                            <p>Release <strong>${params.RELEASE_VERSION}</strong> has been generated.</p>
+                            <p>The following ZIP files are attached:</p>
                             <ul>
                                 <li>${env.RELEASE_NOTES_ZIP}</li>
                                 <li>${env.BINARIES_ZIP}</li>
                             </ul>
-                            <p>Build: <a href="${env.BUILD_URL}">${env.JOB_NAME} #${env.BUILD_NUMBER}</a></p>
-                            <p>Regards,<br/>Jenkins CI</p>
+                            <p>Regards,<br/>Jenkins</p>
                         """
                     )
-
-                    echo "Email sent successfully."
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        // 6. PUBLISH TO GITHUB RELEASES
-        // ─────────────────────────────────────────────────────────────────
         stage('Publish to GitHub') {
             when {
                 expression { return params.PUBLISH_TO_GITHUB }
@@ -226,286 +198,277 @@ pipeline {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    # ── Input validation ──────────────────────────────────────────────
-                    if ([string]::IsNullOrWhiteSpace($env:GH_OWNER)) { throw "GITHUB_OWNER is required." }
-                    if ([string]::IsNullOrWhiteSpace($env:GH_REPO))  { throw "GITHUB_REPO is required."  }
-                    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw "GitHub token credential is missing." }
+                    if ([string]::IsNullOrWhiteSpace($env:GH_OWNER) -or [string]::IsNullOrWhiteSpace($env:GH_REPO)) {
+                        throw "GITHUB_OWNER and GITHUB_REPO are required."
+                    }
 
-                    Write-Host "GitHub owner   : $env:GH_OWNER"
-                    Write-Host "GitHub repo    : $env:GH_REPO"
-                    Write-Host "Release tag    : $env:RELEASE_VERSION"
+                    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+                        throw "GH_TOKEN is empty."
+                    }
 
-                    # ── Shared headers ────────────────────────────────────────────────
+                    Write-Host "GitHub owner : $env:GH_OWNER"
+                    Write-Host "GitHub repo  : $env:GH_REPO"
+                    Write-Host "Release tag  : $env:RELEASE_VERSION"
+
                     $headers = @{
                         "Accept"               = "application/vnd.github+json"
                         "Authorization"        = "Bearer $env:GH_TOKEN"
                         "X-GitHub-Api-Version" = "2022-11-28"
                     }
 
-                    $baseApi    = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO"
-                    $tagName    = $env:RELEASE_VERSION
+                    $tagName    = "$env:RELEASE_VERSION"
+                    $releaseApi = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases"
 
-                    # ── Helper: invoke with retry ─────────────────────────────────────
-                    function Invoke-ApiWithRetry {
-                        param(
-                            [hashtable]$Params,
-                            [int]$MaxAttempts = 3,
-                            [int]$DelaySeconds = 5
-                        )
-                        for ($i = 1; $i -le $MaxAttempts; $i++) {
-                            try {
-                                return Invoke-RestMethod @Params
-                            } catch {
-                                if ($i -eq $MaxAttempts) { throw }
-                                Write-Host "Attempt $i failed – retrying in ${DelaySeconds}s: $($_.Exception.Message)"
-                                Start-Sleep -Seconds $DelaySeconds
+                    $releasePayload = @{
+                        tag_name   = $tagName
+                        name       = "$env:APP_NAME $env:RELEASE_VERSION"
+                        body       = "Automated release for $env:APP_NAME $env:RELEASE_VERSION"
+                        draft      = $false
+                        prerelease = $false
+                    } | ConvertTo-Json -Depth 10
+
+                    $release = $null
+                    $createFailed = $false
+
+                    try {
+                        $release = Invoke-RestMethod `
+                            -Method Post `
+                            -Uri $releaseApi `
+                            -Headers $headers `
+                            -Body $releasePayload `
+                            -ContentType "application/json"
+
+                        Write-Host "Created new GitHub release."
+                    }
+                    catch {
+                        $createFailed = $true
+                        Write-Host "Create release failed."
+                        Write-Host $_.Exception.Message
+                    }
+
+                    if (-not $release) {
+                        try {
+                            $existingReleaseUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/tags/$tagName"
+                            $release = Invoke-RestMethod `
+                                -Method Get `
+                                -Uri $existingReleaseUrl `
+                                -Headers $headers
+
+                            Write-Host "Fetched existing release by tag."
+                        }
+                        catch {
+                            Write-Host "Lookup existing release by tag failed."
+                            Write-Host $_.Exception.Message
+
+                            if ($createFailed) {
+                                throw "GitHub create-release failed, and no existing release was found by tag '$tagName'."
+                            } else {
+                                throw
                             }
                         }
                     }
 
-                    # ── Create or fetch existing release ──────────────────────────────
-                    $release = $null
-
-                    $createParams = @{
-                        Method      = "Post"
-                        Uri         = "$baseApi/releases"
-                        Headers     = $headers
-                        ContentType = "application/json"
-                        Body        = @{
-                            tag_name   = $tagName
-                            name       = "$env:APP_NAME $env:RELEASE_VERSION"
-                            body       = "Automated release for $env:APP_NAME $env:RELEASE_VERSION via Jenkins build #$env:BUILD_NUMBER"
-                            draft      = $false
-                            prerelease = $false
-                        } | ConvertTo-Json -Depth 10
-                    }
-
-                    try {
-                        $release = Invoke-ApiWithRetry -Params $createParams
-                        Write-Host "Created new GitHub release (id=$($release.id))."
-                    } catch {
-                        Write-Host "Create-release failed: $($_.Exception.Message)"
-                        Write-Host "Attempting to fetch existing release by tag '$tagName'..."
-
-                        $getParams = @{
-                            Method  = "Get"
-                            Uri     = "$baseApi/releases/tags/$tagName"
-                            Headers = $headers
-                        }
-                        $release = Invoke-ApiWithRetry -Params $getParams
-                        Write-Host "Fetched existing release (id=$($release.id))."
-                    }
-
                     if (-not $release.id -or -not $release.upload_url) {
-                        throw "GitHub release object is missing id or upload_url."
+                        throw "GitHub release ID or upload URL was not returned."
                     }
 
-                    $releaseId = $release.id
-                    # Strip URI template suffix {?name,label}
-                    $uploadBase = $release.upload_url -replace '\{[^}]+\}', ''
+                    $releaseId = "$($release.id)"
+                    $uploadUrl = "$($release.upload_url)" -replace "\\{\\?name,label\\}", ""
 
-                    Write-Host "Release ID   : $releaseId"
-                    Write-Host "Upload base  : $uploadBase"
+                    Write-Host "Using GitHub release ID: $releaseId"
+                    Write-Host "Resolved upload URL base: $uploadUrl"
 
-                    # ── Delete any pre-existing assets with the same name ─────────────
-                    $existingAssets = Invoke-ApiWithRetry -Params @{
-                        Method  = "Get"
-                        Uri     = "$baseApi/releases/$releaseId/assets"
-                        Headers = $headers
-                    }
+                    $assetsUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/$releaseId/assets"
+                    $assets = Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers
 
-                    $targetNames = @($env:RELEASE_NOTES_ZIP, $env:BINARIES_ZIP)
+                    $targetAssetNames = @(
+                        $env:RELEASE_NOTES_ZIP,
+                        $env:BINARIES_ZIP
+                    )
 
-                    foreach ($asset in $existingAssets) {
-                        if ($targetNames -contains $asset.name) {
-                            Write-Host "Deleting existing asset: $($asset.name) (id=$($asset.id))"
-                            Invoke-ApiWithRetry -Params @{
-                                Method  = "Delete"
-                                Uri     = "$baseApi/releases/assets/$($asset.id)"
-                                Headers = $headers
-                            } | Out-Null
+                    foreach ($asset in $assets) {
+                        if ($targetAssetNames -contains $asset.name) {
+                            Write-Host "Deleting existing asset: $($asset.name)"
+                            $deleteUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/assets/$($asset.id)"
+                            Invoke-RestMethod -Method Delete -Uri $deleteUrl -Headers $headers | Out-Null
                         }
                     }
 
-                    # ── Upload ZIP assets ─────────────────────────────────────────────
                     $filesToUpload = @(
                         (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
                         (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
                     )
 
                     foreach ($filePath in $filesToUpload) {
-                        if (-not (Test-Path -LiteralPath $filePath)) {
-                            throw "Upload file not found: $filePath"
+                        if (-not (Test-Path $filePath)) {
+                            throw "GitHub upload file not found: $filePath"
                         }
 
-                        $fileName    = [System.IO.Path]::GetFileName($filePath)
+                        $fileName = [System.IO.Path]::GetFileName($filePath)
                         $encodedName = [System.Uri]::EscapeDataString($fileName)
-                        $assetUri    = "{0}?name={1}" -f $uploadBase, $encodedName
+                        $assetUploadUrl = "{0}?name={1}" -f $uploadUrl, $encodedName
 
-                        Write-Host "Uploading: $fileName → $assetUri"
+                        Write-Host "Uploading asset: $fileName"
+                        Write-Host "Upload URL: $assetUploadUrl"
 
-                        Invoke-ApiWithRetry -Params @{
-                            Method      = "Post"
-                            Uri         = $assetUri
-                            Headers     = $headers
-                            InFile      = $filePath
-                            ContentType = "application/zip"
-                        } | Out-Null
+                        $uploadResponse = Invoke-RestMethod `
+                            -Method Post `
+                            -Uri $assetUploadUrl `
+                            -Headers $headers `
+                            -InFile $filePath `
+                            -ContentType "application/zip"
 
-                        Write-Host "Uploaded: $fileName"
+                        Write-Host "Uploaded GitHub asset: $fileName"
+                        if ($uploadResponse.browser_download_url) {
+                            Write-Host "Download URL: $($uploadResponse.browser_download_url)"
+                        }
                     }
-
-                    Write-Host "✅ GitHub publish completed."
                 '''
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        // 7. PUBLISH TO CONFLUENCE
-        // ─────────────────────────────────────────────────────────────────
         stage('Publish to Confluence') {
             when {
                 expression { return params.PUBLISH_TO_CONFLUENCE }
             }
             steps {
                 powershell '''
-                    $ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 
-                    # ── Input validation ──────────────────────────────────────────────
-                    if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL))       { throw "CONFLUENCE_BASE_URL is required." }
-                    if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_SPACE))     { throw "CONFLUENCE_SPACE_KEY is required." }
-                    if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR)) { throw "Confluence username credential is missing." }
-                    if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) { throw "Confluence API token credential is missing." }
+# Validate required values
+if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
+    throw "CONFLUENCE_BASE_URL is required."
+}
 
-                    # Strip any trailing slash from the base URL
-                    $baseUrl = $env:CONFLUENCE_URL.TrimEnd('/')
+if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_SPACE)) {
+    throw "CONFLUENCE_SPACE_KEY is required."
+}
 
-                    Write-Host "Confluence URL   : $baseUrl"
-                    Write-Host "Space key        : $env:CONFLUENCE_SPACE"
-                    Write-Host "Parent page ID   : $($env:CONFLUENCE_PARENT_ID -or '(none)')"
+if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
+    [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
+    throw "Confluence credentials are missing."
+}
 
-                    # ── Build page payload ────────────────────────────────────────────
-                    $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
+# Make the page title unique to avoid common duplicate-title conflicts
+$pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Build $env:BUILD_NUMBER"
 
-                    $pageBody  = "<h1>$env:APP_NAME $env:RELEASE_VERSION</h1>"
-                    $pageBody += "<p>Automated release published by Jenkins build "
-                    $pageBody += "<a href='$env:BUILD_URL'>$env:JOB_NAME #$env:BUILD_NUMBER</a>.</p>"
-                    $pageBody += "<h2>Attached Artifacts</h2><ul>"
-                    $pageBody += "<li><strong>Release Notes ZIP:</strong> $env:RELEASE_NOTES_ZIP</li>"
-                    $pageBody += "<li><strong>Deployment Binary ZIP:</strong> $env:BINARIES_ZIP</li>"
-                    $pageBody += "</ul>"
+$pageBody = "<h1>$env:APP_NAME $env:RELEASE_VERSION</h1>" +
+            "<p>Automated release from Jenkins.</p>" +
+            "<ul>" +
+            "<li><b>Release Notes ZIP:</b> $env:RELEASE_NOTES_ZIP</li>" +
+            "<li><b>Deployment Binary ZIP:</b> $env:BINARIES_ZIP</li>" +
+            "</ul>"
 
-                    $payload = [ordered]@{
-                        type  = "page"
-                        title = $pageTitle
-                        space = @{ key = $env:CONFLUENCE_SPACE }
-                        body  = @{
-                            storage = @{
-                                value          = $pageBody
-                                representation = "storage"
-                            }
-                        }
-                    }
+$payload = @{
+    type  = "page"
+    title = $pageTitle
+    space = @{ key = $env:CONFLUENCE_SPACE }
+    body  = @{
+        storage = @{
+            value          = $pageBody
+            representation = "storage"
+        }
+    }
+}
 
-                    if (-not [string]::IsNullOrWhiteSpace($env:CONFLUENCE_PARENT_ID)) {
-                        $payload["ancestors"] = @( @{ id = $env:CONFLUENCE_PARENT_ID } )
-                    }
+if (-not [string]::IsNullOrWhiteSpace($env:CONFLUENCE_PARENT_ID)) {
+    $payload["ancestors"] = @(@{ id = $env:CONFLUENCE_PARENT_ID })
+}
 
-                    $jsonBody = $payload | ConvertTo-Json -Depth 20
-                    Set-Content -Path "page_payload.json" -Value $jsonBody -Encoding UTF8
-                    Write-Host "Page payload written to page_payload.json."
+$jsonBody = $payload | ConvertTo-Json -Depth 20
+Set-Content -Path page_payload.json -Value $jsonBody -Encoding UTF8
 
-                    # ── Create page ───────────────────────────────────────────────────
-                    $createResponseFile = "confluence_create_response.json"
+Write-Host "Creating Confluence page: $pageTitle"
+Write-Host "Confluence URL: $env:CONFLUENCE_URL"
+Write-Host "Space key: $env:CONFLUENCE_SPACE"
 
-                    curl.exe -sS --fail-with-body `
-                        -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
-                        -H "Content-Type: application/json" `
-                        -X POST `
-                        --data @page_payload.json `
-                        "$baseUrl/rest/api/content" `
-                        -o $createResponseFile
+$responseFile = "confluence_create_response.json"
+$statusCode = curl.exe -sS `
+  -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
+  -H "Content-Type: application/json" `
+  -X POST `
+  --data-binary "@page_payload.json" `
+  "$env:CONFLUENCE_URL/rest/api/content" `
+  -o $responseFile `
+  -w "%{http_code}"
 
-                    if (-not (Test-Path $createResponseFile)) {
-                        throw "No response received from Confluence create-page request."
-                    }
+if (-not (Test-Path $responseFile)) {
+    throw "No response file returned from Confluence create page request."
+}
 
-                    $createResponseText = Get-Content $createResponseFile -Raw
-                    Write-Host "Create-page response:"
-                    Write-Host $createResponseText
+$responseText = Get-Content $responseFile -Raw
+Write-Host "Confluence create-page HTTP status: $statusCode"
+Write-Host "Create page response:"
+Write-Host $responseText
 
-                    $pageResponse = $createResponseText | ConvertFrom-Json -ErrorAction Stop
+if ($statusCode -notin @("200","201")) {
+    throw "Confluence page creation failed with HTTP status $statusCode. Review the response above."
+}
 
-                    if (-not $pageResponse.id) {
-                        # Surface the Confluence error message if available
-                        $errMsg = $pageResponse.message ?? ($pageResponse | ConvertTo-Json -Depth 5)
-                        throw "Confluence page creation failed: $errMsg"
-                    }
+$pageResponse = $responseText | ConvertFrom-Json
 
-                    $pageId = "$($pageResponse.id)"
-                    Write-Host "✅ Created Confluence page (id=$pageId): $($pageResponse._links.base)$($pageResponse._links.webui)"
+if (-not $pageResponse.id) {
+    throw "Confluence page creation succeeded technically, but page ID was not returned."
+}
 
-                    # ── Upload attachments ────────────────────────────────────────────
-                    $filesToUpload = @(
-                        (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
-                        (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
-                    )
+$pageId = "$($pageResponse.id)"
+Write-Host "Created Confluence page ID: $pageId"
 
-                    foreach ($filePath in $filesToUpload) {
-                        if (-not (Test-Path -LiteralPath $filePath)) {
-                            throw "Attachment not found: $filePath"
-                        }
+$filesToUpload = @(
+    (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
+    (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
+)
 
-                        $fileName           = [System.IO.Path]::GetFileName($filePath)
-                        $attachResponseFile = "attach_response_$fileName.json"
+foreach ($filePath in $filesToUpload) {
+    if (-not (Test-Path $filePath)) {
+        throw "Attachment file not found: $filePath"
+    }
 
-                        Write-Host "Uploading attachment: $fileName"
+    $fileName = [System.IO.Path]::GetFileName($filePath)
+    Write-Host "Uploading attachment: $fileName"
 
-                        curl.exe -sS --fail-with-body `
-                            -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
-                            -H "X-Atlassian-Token: nocheck" `
-                            -X POST `
-                            -F "file=@$filePath;type=application/zip" `
-                            "$baseUrl/rest/api/content/$pageId/child/attachment" `
-                            -o $attachResponseFile
+    $safeName = $fileName -replace '[^a-zA-Z0-9._-]', '_'
+    $attachResponseFile = "attach_${safeName}.json"
 
-                        $attachResponseText = Get-Content $attachResponseFile -Raw
-                        Write-Host "Attachment response for ${fileName}:"
-                        Write-Host $attachResponseText
+    $attachStatus = curl.exe -sS `
+      -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
+      -H "X-Atlassian-Token: nocheck" `
+      -X POST `
+      -F "file=@$filePath" `
+      "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment" `
+      -o $attachResponseFile `
+      -w "%{http_code}"
 
-                        $attachResponse = $attachResponseText | ConvertFrom-Json -ErrorAction SilentlyContinue
-                        if (-not $attachResponse.results -and -not $attachResponse.id) {
-                            Write-Warning "Unexpected attachment response for $fileName — review the output above."
-                        } else {
-                            Write-Host "✅ Attached: $fileName"
-                        }
-                    }
+    $attachResponseText = ""
+    if (Test-Path $attachResponseFile) {
+        $attachResponseText = Get-Content $attachResponseFile -Raw
+    }
 
-                    Write-Host "✅ Confluence publish completed."
-                '''
+    Write-Host "Attachment upload status for $fileName: $attachStatus"
+    Write-Host "Attachment upload response for $fileName:"
+    Write-Host $attachResponseText
+
+    if ($attachStatus -notin @("200","201")) {
+        throw "Attachment upload failed for $fileName with HTTP status $attachStatus"
+    }
+}
+
+Write-Host "Confluence publish completed successfully"
+'''
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // POST ACTIONS
-    // ─────────────────────────────────────────────────────────────────────
     post {
         always {
-            archiveArtifacts artifacts: 'dist/*.zip', fingerprint: true, allowEmptyArchive: true
-            // Clean up temporary JSON files created during the build
-            powershell '''
-                @("page_payload.json", "confluence_create_response.json") | ForEach-Object {
-                    if (Test-Path $_) { Remove-Item $_ -Force; Write-Host "Cleaned up: $_" }
-                }
-                Get-ChildItem -Filter "attach_response_*.json" | Remove-Item -Force
-            '''
+            archiveArtifacts artifacts: 'dist/*.zip', fingerprint: true, onlyIfSuccessful: false
+            echo "Done"
         }
         success {
-            echo "✅ Pipeline completed successfully — ${params.APP_NAME} v${params.RELEASE_VERSION}"
+            echo "Pipeline completed successfully."
         }
         failure {
-            echo "❌ Pipeline failed — check stage logs above for details."
+            echo "Pipeline failed."
         }
     }
 }
