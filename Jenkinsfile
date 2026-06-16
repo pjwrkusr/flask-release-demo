@@ -134,45 +134,58 @@ pipeline {
 
         stage('Collect and validate release note PDFs') {
             steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
+                script {
+                    // Capture uploaded file paths from Jenkins parameters (correct way)
+                    def uploadedFiles = [
+                        params.RELEASE_NOTE_1,
+                        params.RELEASE_NOTE_2,
+                        params.RELEASE_NOTE_3,
+                        params.RELEASE_NOTE_4,
+                        params.RELEASE_NOTE_5,
+                        params.RELEASE_NOTE_6,
+                        params.RELEASE_NOTE_7,
+                        params.RELEASE_NOTE_8
+                    ].findAll { it != null && it.trim() != "" }
 
-                    $uploadVars = @(
-                        "RELEASE_NOTE_1",
-                        "RELEASE_NOTE_2",
-                        "RELEASE_NOTE_3",
-                        "RELEASE_NOTE_4",
-                        "RELEASE_NOTE_5",
-                        "RELEASE_NOTE_6",
-                        "RELEASE_NOTE_7",
-                        "RELEASE_NOTE_8"
-                    )
+                    echo "Raw uploaded parameters: ${uploadedFiles}"
 
-                    $pdfCount = 0
+                    if (uploadedFiles.size() == 0) {
+                        error("Jenkins did not receive any uploaded release note files.")
+                    }
 
-                    foreach ($varName in $uploadVars) {
-                        $uploadedFile = [Environment]::GetEnvironmentVariable($varName)
+                    // Pass into PowerShell as a joined string
+                    def fileList = uploadedFiles.join(',')
 
-                        if (-not [string]::IsNullOrWhiteSpace($uploadedFile)) {
-                            if (Test-Path $uploadedFile) {
-                                $extension = [System.IO.Path]::GetExtension($uploadedFile)
-                                if ($extension -notin @(".pdf", ".PDF")) {
-                                    throw "Uploaded file in $varName is not a PDF: $uploadedFile"
+                    powershell """
+                        \$ErrorActionPreference = "Stop"
+
+                        \$files = "${fileList}".Split(',')
+
+                        \$count = 0
+
+                        foreach (\$file in \$files) {
+                            if (Test-Path \$file) {
+                                \$ext = [System.IO.Path]::GetExtension(\$file)
+
+                                if (\$ext -ne ".pdf" -and \$ext -ne ".PDF") {
+                                    throw "Invalid file type: \$file"
                                 }
 
-                                Copy-Item -Path $uploadedFile -Destination $env:RELEASE_NOTES_DIR -Force
-                                $pdfCount++
-                                Write-Host "Copied PDF: $uploadedFile"
+                                Copy-Item -Path \$file -Destination "$env:RELEASE_NOTES_DIR" -Force
+                                Write-Host "Copied: \$file"
+                                \$count++
+                            } else {
+                                Write-Warning "File path not found: \$file"
                             }
                         }
-                    }
 
-                    if ($pdfCount -eq 0) {
-                        throw "At least one release note PDF must be uploaded."
-                    }
+                        if (\$count -eq 0) {
+                            throw "PDF files were selected but not found in workspace."
+                        }
 
-                    Write-Host "Validated and copied $pdfCount release note PDF(s) into $env:RELEASE_NOTES_DIR"
-                '''
+                        Write-Host "Successfully processed \$count release note PDFs."
+                    """
+                }
             }
         }
 
