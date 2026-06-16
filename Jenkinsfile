@@ -306,7 +306,9 @@ pipeline {
 
                         $fileName = [System.IO.Path]::GetFileName($filePath)
                         $encodedName = [System.Uri]::EscapeDataString($fileName)
-                        $assetUploadUrl = "$uploadUrl?name=$encodedName"
+
+                        # IMPORTANT: use format string, not "$uploadUrl?name=..."
+                        $assetUploadUrl = "{0}?name={1}" -f $uploadUrl, $encodedName
 
                         Write-Host "Uploading asset: $fileName"
                         Write-Host "Upload URL: $assetUploadUrl"
