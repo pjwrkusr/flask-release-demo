@@ -246,33 +246,29 @@ pipeline {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    Write-Host "Workspace:"
-                    Write-Host $env:WORKSPACE
-
-                    Get-ChildItem -Path $env:WORKSPACE -Recurse
-
                     New-Item `
                         -ItemType Directory `
                         -Force `
                         -Path $env:RELEASE_NOTES_DIR | Out-Null
 
-                    $pdf = Get-ChildItem `
-                        -Path $env:WORKSPACE `
-                        -Recurse `
-                        -Filter *.pdf `
-                        | Select-Object -First 1
+                    $uploadedFile = Join-Path $env:WORKSPACE "RELEASE_NOTE_FILE"
 
-                    if (-not $pdf) {
-                        throw "No uploaded PDF found after unstash."
+                    if (-not (Test-Path $uploadedFile)) {
+                        throw "Uploaded file not found: $uploadedFile"
                     }
 
+                    $targetFile = Join-Path `
+                        $env:RELEASE_NOTES_DIR `
+                        "Release_Notes_v$env:RELEASE_VERSION.pdf"
+
                     Copy-Item `
-                        $pdf.FullName `
-                        -Destination $env:RELEASE_NOTES_DIR `
+                        $uploadedFile `
+                        $targetFile `
                         -Force
 
-                    Write-Host "Release note copied:"
-                    Write-Host $pdf.Name
+                    Write-Host "Release note uploaded successfully"
+                    Write-Host "Source : $uploadedFile"
+                    Write-Host "Target : $targetFile"
 
                     Get-ChildItem $env:RELEASE_NOTES_DIR
                 '''
