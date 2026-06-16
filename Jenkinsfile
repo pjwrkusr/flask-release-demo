@@ -334,9 +334,7 @@ pipeline {
         steps {
         powershell '''
         $ErrorActionPreference = "Stop"
-                # --------------------------------------------------
-                # Validate required values
-                # --------------------------------------------------
+
                 if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
                     throw "CONFLUENCE_BASE_URL is required."
                 }
@@ -346,77 +344,82 @@ pipeline {
                     throw "Confluence credentials are missing."
                 }
 
-                # Use configured page ID
                 $pageId = $env:CONFLUENCE_PARENT_ID
 
                 if ([string]::IsNullOrWhiteSpace($pageId)) {
                     throw "CONFLUENCE_PARENT_PAGE_ID is required."
                 }
 
-                Write-Host "======================================"
-                Write-Host "Confluence Upload Configuration"
-                Write-Host "======================================"
-                Write-Host "Confluence URL : $env:CONFLUENCE_URL"
-                Write-Host "Page ID        : $pageId"
-                Write-Host "User           : $env:CONFLUENCE_CREDS_USR"
-                Write-Host "Dist Directory : $env:DIST_DIR"
-                Write-Host "======================================"
+                Write-Host "Updating Confluence page ID: $pageId"
 
-                # --------------------------------------------------
-                # Files to upload
-                # --------------------------------------------------
-                $filesToUpload = @(
-                    (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
-                    (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
+                $auth = [Convert]::ToBase64String(
+                    [Text.Encoding]::ASCII.GetBytes(
+                        "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
+                    )
                 )
 
-                foreach ($filePath in $filesToUpload) {
-
-                    if (-not (Test-Path $filePath)) {
-                        throw "Attachment file not found: $filePath"
-                    }
-
-                    $fileName = [System.IO.Path]::GetFileName($filePath)
-
-                    Write-Host ""
-                    Write-Host "Uploading attachment: $fileName"
-
-                    $safeName = $fileName -replace '[^a-zA-Z0-9._-]', '_'
-                    $attachResponseFile = "attach_${safeName}.json"
-
-                    $attachStatus = curl.exe -sS `
-                        -u "$env:CONFLUENCE_CREDS_USR`:$env:CONFLUENCE_CREDS_PSW" `
-                        -H "X-Atlassian-Token: nocheck" `
-                        -X POST `
-                        -F "file=@$filePath" `
-                        "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment" `
-                        -o $attachResponseFile `
-                        -w "%{http_code}"
-
-                    $attachResponseText = ""
-
-                    if (Test-Path $attachResponseFile) {
-                        $attachResponseText = Get-Content $attachResponseFile -Raw
-                    }
-
-                    Write-Host "Attachment upload status for ${fileName}: $attachStatus"
-                    Write-Host "Attachment upload response for ${fileName}:"
-                    Write-Host $attachResponseText
-
-                    if ($attachStatus -notin @("200", "201")) {
-                        throw "Attachment upload failed for ${fileName} with HTTP status $attachStatus"
-                    }
-
-                    Write-Host "Successfully uploaded ${fileName}"
+                $headers = @{
+                    Authorization = "Basic $auth"
+                    Accept        = "application/json"
                 }
 
-                Write-Host ""
-                Write-Host "======================================"
-                Write-Host "Confluence artifact upload completed successfully"
-                Write-Host "======================================"
+                # Get current page version
+                $pageInfo = Invoke-RestMethod `
+                    -Method Get `
+                    -Uri "$env:CONFLUENCE_URL/rest/api/content/$pageId?expand=version" `
+                    -Headers $headers
+
+                $newVersion = $pageInfo.version.number + 1
+
+                $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
+
+                $pageContent = @"
+
+        <h1>$env:APP_NAME $env:RELEASE_VERSION Release</h1>
+
+        <p>Automated release publication from Jenkins.</p>
+
+        <p><strong>Release notes ZIP:</strong></p>
+        <p>$env:RELEASE_NOTES_ZIP</p>
+
+        <p><strong>Deployment binaries ZIP:</strong></p>
+        <p>$env:BINARIES_ZIP</p>
+
+        <hr/>
+
+        <p><strong>Application:</strong> $env:APP_NAME</p>
+        <p><strong>Version:</strong> $env:RELEASE_VERSION</p>
+        <p><strong>Published By:</strong> Jenkins Pipeline</p>
+        <p><strong>Status:</strong> Successful</p>
+        "@
+
+                $payload = @{
+                    id    = "$pageId"
+                    type  = "page"
+                    title = $pageTitle
+                    version = @{
+                        number = $newVersion
+                    }
+                    body = @{
+                        storage = @{
+                            value = $pageContent
+                            representation = "storage"
+                        }
+                    }
+                } | ConvertTo-Json -Depth 20
+
+                Invoke-RestMethod `
+                    -Method Put `
+                    -Uri "$env:CONFLUENCE_URL/rest/api/content/$pageId" `
+                    -Headers ($headers + @{ "Content-Type" = "application/json" }) `
+                    -Body $payload
+
+                Write-Host "Confluence page updated successfully."
             '''
         }
-     }
+
+    }
+
   }
 
     post {
