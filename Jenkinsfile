@@ -1,6 +1,27 @@
+/***************************************************************************************************
+ * JENKINS RELEASE AUTOMATION PIPELINE
+ *
+ * Purpose:
+ *   - Process Release Notes PDF
+ *   - Generate Release ZIP Packages
+ *   - Send Release Email
+ *   - Publish Release Assets to GitHub
+ *   - Publish Release Information to Confluence
+ *
+ * Author  : Project Work User
+ * Version : 1.0
+ ***************************************************************************************************/
+
 pipeline {
+
+    /***********************************************************************************************
+     * AGENT CONFIGURATION
+     ***********************************************************************************************/
     agent any
 
+    /***********************************************************************************************
+     * PIPELINE OPTIONS
+     ***********************************************************************************************/
     options {
         timestamps()
         disableConcurrentBuilds()
@@ -8,74 +29,177 @@ pipeline {
         skipDefaultCheckout(true)
     }
 
+    /***********************************************************************************************
+     * BUILD PARAMETERS
+     ***********************************************************************************************/
     parameters {
-        string(name: 'APP_NAME', defaultValue: 'flask-release-demo', description: 'Application name')
-        string(name: 'RELEASE_VERSION', defaultValue: '1.0.0', description: 'Release version')
 
-        string(name: 'EMAIL_TO', defaultValue: 'projectworkuser@gmail.com', description: 'Primary recipients (comma-separated)')
-        string(name: 'EMAIL_CC', defaultValue: '', description: 'CC recipients (comma-separated)')
-        string(name: 'EMAIL_BCC', defaultValue: '', description: 'BCC recipients (comma-separated)')
-        string(name: 'EMAIL_FROM', defaultValue: 'projectworkuser@gmail.com', description: 'From address')
-        string(name: 'EMAIL_REPLY_TO', defaultValue: 'projectworkuser@gmail.com', description: 'Reply-To address')
+        // Application Information
+        string(
+            name: 'APP_NAME',
+            defaultValue: 'flask-release-demo',
+            description: 'Application name'
+        )
 
-        booleanParam(name: 'PUBLISH_EMAIL', defaultValue: true, description: 'Send email with ZIP attachments')
-        booleanParam(name: 'PUBLISH_TO_GITHUB', defaultValue: true, description: 'Create/update GitHub Release and upload ZIPs')
-        booleanParam(name: 'PUBLISH_TO_CONFLUENCE', defaultValue: true, description: 'Create Confluence page and attach ZIPs')
+        string(
+            name: 'RELEASE_VERSION',
+            defaultValue: '1.0.0',
+            description: 'Release version'
+        )
 
+        // Email Configuration
+        string(
+            name: 'EMAIL_TO',
+            defaultValue: 'projectworkuser@gmail.com',
+            description: 'Primary recipients (comma-separated)'
+        )
+
+        string(
+            name: 'EMAIL_CC',
+            defaultValue: 'devopsuser8413@gmail.com',
+            description: 'CC recipients (comma-separated)'
+        )
+
+        string(
+            name: 'EMAIL_BCC',
+            defaultValue: 'devopsuser8413@gmail.com',
+            description: 'BCC recipients (comma-separated)'
+        )
+
+        string(
+            name: 'EMAIL_FROM',
+            defaultValue: 'projectworkuser@gmail.com',
+            description: 'From address'
+        )
+
+        string(
+            name: 'EMAIL_REPLY_TO',
+            defaultValue: 'projectworkuser@gmail.com',
+            description: 'Reply-To address'
+        )
+
+        // Publishing Options
+        booleanParam(
+            name: 'PUBLISH_EMAIL',
+            defaultValue: true,
+            description: 'Send email with ZIP attachments'
+        )
+
+        booleanParam(
+            name: 'PUBLISH_TO_GITHUB',
+            defaultValue: true,
+            description: 'Create/update GitHub Release and upload ZIPs'
+        )
+
+        booleanParam(
+            name: 'PUBLISH_TO_CONFLUENCE',
+            defaultValue: true,
+            description: 'Publish release information to Confluence'
+        )
+
+        // Release Notes
         string(
             name: 'RELEASE_NOTE_PATH',
             defaultValue: 'C:\\Users\\I17270834\\Downloads\\Release_Notes_v1.0.0.pdf',
-            description: 'Local file path on Jenkins machine'
+            description: 'Local PDF path on Jenkins server'
         )
 
+        // Confluence Configuration
         string(
             name: 'CONFLUENCE_BASE_URL',
             defaultValue: 'https://projectworkuser.atlassian.net/wiki',
-            description: 'Confluence base URL'
+            description: 'Confluence Base URL'
         )
-        string(name: 'CONFLUENCE_SPACE_KEY', defaultValue: 'DEMO', description: 'Confluence space key')
-        string(name: 'CONFLUENCE_PARENT_PAGE_ID', defaultValue: '131214', description: 'Confluence parent page ID (optional)')
 
-        string(name: 'GITHUB_OWNER', defaultValue: 'pjwrkusr', description: 'GitHub owner')
-        string(name: 'GITHUB_REPO', defaultValue: 'flask-demo-publish-docs', description: 'GitHub repository')
+        string(
+            name: 'CONFLUENCE_SPACE_KEY',
+            defaultValue: 'DEMO',
+            description: 'Confluence Space Key'
+        )
+
+        string(
+            name: 'CONFLUENCE_PARENT_PAGE_ID',
+            defaultValue: '131214',
+            description: 'Confluence Parent Page ID'
+        )
+
+        // GitHub Configuration
+        string(
+            name: 'GITHUB_OWNER',
+            defaultValue: 'pjwrkusr',
+            description: 'GitHub Organization/User'
+        )
+
+        string(
+            name: 'GITHUB_REPO',
+            defaultValue: 'flask-demo-publish-docs',
+            description: 'GitHub Repository'
+        )
     }
 
+    /***********************************************************************************************
+     * ENVIRONMENT VARIABLES
+     ***********************************************************************************************/
     environment {
+
+        // Working Directories
         RELEASE_NOTES_DIR = "release-notes"
         BUILD_INPUT_DIR   = "build-input"
         DIST_DIR          = "dist"
 
+        // Output ZIP Files
         RELEASE_NOTES_ZIP = "${params.APP_NAME}-${params.RELEASE_VERSION}-release-notes.zip"
         BINARIES_ZIP      = "${params.APP_NAME}-${params.RELEASE_VERSION}-deployment-binaries.zip"
 
+        // Email Settings
         EMAIL_TO_LIST   = "${params.EMAIL_TO}"
         EMAIL_CC_LIST   = "${params.EMAIL_CC}"
         EMAIL_BCC_LIST  = "${params.EMAIL_BCC}"
         EMAIL_FROM_ADDR = "${params.EMAIL_FROM}"
         EMAIL_REPLY_TO  = "${params.EMAIL_REPLY_TO}"
 
+        // Confluence Settings
         CONFLUENCE_URL       = "${params.CONFLUENCE_BASE_URL}"
         CONFLUENCE_SPACE     = "${params.CONFLUENCE_SPACE_KEY}"
         CONFLUENCE_PARENT_ID = "${params.CONFLUENCE_PARENT_PAGE_ID}"
 
+        // GitHub Settings
         GH_OWNER = "${params.GITHUB_OWNER}"
         GH_REPO  = "${params.GITHUB_REPO}"
 
-        // Credentials
-        // confluence-projectwork-token = Username with password (email + API token)
-        // github-token-release         = Secret text
+        /*******************************************************************************************
+         * CREDENTIALS
+         *
+         * confluence-projectwork-token
+         *     Type: Username with Password
+         *     Username: Atlassian Email
+         *     Password: Atlassian API Token
+         *
+         * github-token-release
+         *     Type: Secret Text
+         *     Value: GitHub Personal Access Token
+         *******************************************************************************************/
         CONFLUENCE_CREDS = credentials('confluence-projectwork-token')
         GH_TOKEN         = credentials('github-token-release')
     }
 
+    /***********************************************************************************************
+     * PIPELINE STAGES
+     ***********************************************************************************************/
     stages {
 
+        /*******************************************************************************************
+         * STAGE 1 - CHECKOUT SOURCE CODE
+         *******************************************************************************************/
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
+        /*******************************************************************************************
+         * STAGE 2 - PREPARE WORKSPACE FOLDERS
+         *******************************************************************************************/
         stage('Prepare folders') {
             steps {
                 powershell '''
@@ -93,6 +217,9 @@ pipeline {
             }
         }
 
+        /*******************************************************************************************
+         * STAGE 3 - PROCESS RELEASE NOTES PDF
+         *******************************************************************************************/
         stage('Process release note') {
             steps {
                 powershell '''
@@ -121,6 +248,13 @@ pipeline {
             }
         }
 
+        /*******************************************************************************************
+         * STAGE 4 - CREATE RELEASE ZIP PACKAGES
+         *
+         * Generates:
+         *   1. Release Notes ZIP
+         *   2. Deployment Binaries ZIP
+         *******************************************************************************************/
         stage('Create ZIPs') {
             steps {
                 powershell '''
@@ -153,6 +287,13 @@ pipeline {
             }
         }
 
+        /*******************************************************************************************
+         * STAGE 5 - SEND RELEASE EMAIL
+         *
+         * Attachments:
+         *   - Release Notes ZIP
+         *   - Deployment Binaries ZIP
+         *******************************************************************************************/
         stage('Send email') {
             when {
                 expression { return params.PUBLISH_EMAIL }
@@ -190,6 +331,15 @@ pipeline {
             }
         }
 
+        /*******************************************************************************************
+         * STAGE 6 - PUBLISH TO GITHUB
+         *
+         * Actions:
+         *   - Create Release
+         *   - Reuse Existing Release
+         *   - Delete Existing Assets
+         *   - Upload ZIP Files
+         *******************************************************************************************/
         stage('Publish to GitHub') {
             when {
                 expression { return params.PUBLISH_TO_GITHUB }
@@ -327,88 +477,15 @@ pipeline {
             }
         }
 
-        stage('Test Confluence Connection') {
-            when {
-                expression { return params.PUBLISH_TO_CONFLUENCE }
-            }
-
-            steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
-
-                    Write-Host "Confluence URL: $env:CONFLUENCE_URL"
-
-                    $pair = "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
-                    $base64 = [Convert]::ToBase64String(
-                        [Text.Encoding]::ASCII.GetBytes($pair)
-                    )
-
-                    $headers = @{
-                        Authorization = "Basic $base64"
-                        Accept = "application/json"
-                    }
-
-                    try {
-                        $result = Invoke-RestMethod `
-                            -Method Get `
-                            -Uri "$env:CONFLUENCE_URL/rest/api/space" `
-                            -Headers $headers
-
-                        Write-Host "SUCCESS - Confluence authentication works"
-                        Write-Host "Spaces found: $($result.results.Count)"
-                    }
-                    catch {
-                        Write-Host "FAILED"
-                        Write-Host $_.Exception.Message
-
-                        if ($_.Exception.Response) {
-                            $reader = New-Object System.IO.StreamReader(
-                                $_.Exception.Response.GetResponseStream()
-                            )
-                            $response = $reader.ReadToEnd()
-
-                            Write-Host "Response:"
-                            Write-Host $response
-                        }
-
-                        throw
-                    }
-                '''
-            }
-        }
-
-        stage('Find Flask Page') {
-            steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
-
-                    $pair = "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
-                    $base64 = [Convert]::ToBase64String(
-                        [Text.Encoding]::ASCII.GetBytes($pair)
-                    )
-
-                    $headers = @{
-                        Authorization = "Basic $base64"
-                        Accept = "application/json"
-                    }
-
-                    $title = "Flask"
-
-                    $url = "$env:CONFLUENCE_URL/rest/api/content?title=$title&spaceKey=DEMO&expand=version"
-
-                    Write-Host "URL:"
-                    Write-Host $url
-
-                    $result = Invoke-RestMethod `
-                        -Method Get `
-                        -Uri $url `
-                        -Headers $headers
-
-                    $result | ConvertTo-Json -Depth 20
-                '''
-            }
-        }
-
+        /*******************************************************************************************
+         * STAGE 9 - PUBLISH TO CONFLUENCE
+         *
+         * Actions:
+         *   - Retrieve Page Information
+         *   - Increment Page Version
+         *   - Update Page Content
+         *   - Publish Release Details
+         *******************************************************************************************/
         stage('Publish to Confluence') {
             when {
                 expression { return params.PUBLISH_TO_CONFLUENCE }
@@ -499,9 +576,11 @@ pipeline {
                 '''
             }
         }
-
   }
 
+    /***********************************************************************************************
+     * POST BUILD ACTIONS
+     ***********************************************************************************************/
     post {
         always {
             archiveArtifacts artifacts: 'dist/*.zip', fingerprint: true, onlyIfSuccessful: false
