@@ -198,11 +198,11 @@ pipeline {
                 powershell '''
                     $ErrorActionPreference = "Stop"
 
-                    if ([string]::IsNullOrWhiteSpace($env:GH_OWNER) -or [string]::IsNullOrWhiteSpace($env:GH_REPO)) {
+                    if (:IsNullOrWhiteSpace($env:GH_OWNER) -or :IsNullOrWhiteSpace($env:GH_REPO)) {
                         throw "GITHUB_OWNER and GITHUB_REPO are required."
                     }
 
-                    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+                    if (:IsNullOrWhiteSpace($env:GH_TOKEN)) {
                         throw "GH_TOKEN is empty. Check Jenkins credential 'github-token'."
                     }
 
@@ -228,6 +228,7 @@ pipeline {
                     } | ConvertTo-Json -Depth 10
 
                     $release = $null
+                    $createFailed = $false
 
                     try {
                         $release = Invoke-RestMethod `
@@ -240,15 +241,31 @@ pipeline {
                         Write-Host "Created new GitHub release."
                     }
                     catch {
-                        Write-Host "Create release failed. Trying to fetch existing release by tag..."
+                        $createFailed = $true
+                        Write-Host "Create release failed."
                         Write-Host $_.Exception.Message
+                    }
 
-                        $existingReleaseUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/tags/$tagName"
+                    if (-not $release) {
+                        try {
+                            $existingReleaseUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/tags/$tagName"
+                            $release = Invoke-RestMethod `
+                                -Method Get `
+                                -Uri $existingReleaseUrl `
+                                -Headers $headers
 
-                        $release = Invoke-RestMethod `
-                            -Method Get `
-                            -Uri $existingReleaseUrl `
-                            -Headers $headers
+                            Write-Host "Fetched existing release by tag."
+                        }
+                        catch {
+                            Write-Host "Lookup existing release by tag failed."
+                            Write-Host $_.Exception.Message
+
+                            if ($createFailed) {
+                                throw "GitHub create-release failed, and no existing release was found by tag '$tagName'."
+                            } else {
+                                throw
+                            }
+                        }
                     }
 
                     if (-not $release.id -or -not $release.upload_url) {
@@ -259,8 +276,8 @@ pipeline {
                     $uploadUrl = "$($release.upload_url)" -replace "\\{\\?name,label\\}", ""
 
                     Write-Host "Using GitHub release ID: $releaseId"
+                    Write-Host "Resolved upload URL base: $uploadUrl"
 
-                    # List current assets on the release
                     $assetsUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/$releaseId/assets"
                     $assets = Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers
 
@@ -288,21 +305,18 @@ pipeline {
                         }
 
                         $fileName = [System.IO.Path]::GetFileName($filePath)
-                        $assetUploadUrl = "$uploadUrl?name=$fileName"
+                        $encodedName = [System.Uri]::EscapeDataString($fileName)
+                        $assetUploadUrl = "$uploadUrl?name=$encodedName"
 
-                        $uploadHeaders = @{
-                            "Accept"               = "application/vnd.github+json"
-                            "Authorization"        = "Bearer $env:GH_TOKEN"
-                            "X-GitHub-Api-Version" = "2022-11-28"
-                            "Content-Type"         = "application/zip"
-                        }
+                        Write-Host "Uploading asset: $fileName"
+                        Write-Host "Upload URL: $assetUploadUrl"
 
-                        Invoke-WebRequest `
+                        Invoke-RestMethod `
                             -Method Post `
                             -Uri $assetUploadUrl `
-                            -Headers $uploadHeaders `
+                            -Headers $headers `
                             -InFile $filePath `
-                            -UseBasicParsing | Out-Null
+                            -ContentType "application/zip"
 
                         Write-Host "Uploaded GitHub asset: $fileName"
                     }
