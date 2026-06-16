@@ -37,7 +37,7 @@ pipeline {
         string(name: 'CONFLUENCE_PARENT_PAGE_ID', defaultValue: '131214', description: 'Confluence parent page ID (optional)')
 
         string(name: 'GITHUB_OWNER', defaultValue: 'pjwrkusr', description: 'GitHub owner')
-        string(name: 'GITHUB_REPO', defaultValue: 'flask-demo-publish-docs', description: 'GitHub repository')
+        string(name: 'GITHUB_REPO', defaultValue: 'flask-release-demo', description: 'GitHub repository')
     }
 
     environment {
