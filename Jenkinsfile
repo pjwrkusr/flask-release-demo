@@ -43,8 +43,8 @@ pipeline {
 
         string(
             name: 'RELEASE_VERSION',
-            defaultValue: '1.0.0',
-            description: 'Release version'
+            defaultValue: '',
+            description: 'Enter release version (Example: 1.0.0)'
         )
 
         // Email Configuration
@@ -223,7 +223,20 @@ pipeline {
         }
 
         /*******************************************************************************************
-         * STAGE 3 - PROCESS RELEASE NOTES PDF
+         * STAGE 3 - VALIDATE RELEASE VERSION
+         *******************************************************************************************/
+         stage('Validate Release Version') {
+            steps {
+                script {
+                    if (!params.RELEASE_VERSION?.trim()) {
+                        error("RELEASE_VERSION is required.")
+                    }
+                }
+            }
+        }
+
+        /*******************************************************************************************
+         * STAGE 4 - PROCESS RELEASE NOTES PDF
          *******************************************************************************************/
         stage('Process release note') {
             steps {
@@ -267,7 +280,7 @@ pipeline {
         }
 
         /*******************************************************************************************
-         * STAGE 4 - CREATE RELEASE ZIP PACKAGES
+         * STAGE 5 - CREATE RELEASE ZIP PACKAGES
          *
          * Generates:
          *   1. Release Notes ZIP
@@ -306,7 +319,7 @@ pipeline {
         }
 
         /*******************************************************************************************
-         * STAGE 5 - SEND RELEASE EMAIL
+         * STAGE 6 - SEND RELEASE EMAIL
          *
          * Attachments:
          *   - Release Notes ZIP
@@ -350,7 +363,7 @@ pipeline {
         }
 
         /*******************************************************************************************
-         * STAGE 6 - PUBLISH TO GITHUB
+         * STAGE 7 - PUBLISH TO GITHUB
          *
          * Actions:
          *   - Create Release
@@ -496,7 +509,7 @@ pipeline {
         }
 
         /*******************************************************************************************
-         * STAGE 7 - PUBLISH TO CONFLUENCE
+         * STAGE 8 - PUBLISH TO CONFLUENCE
          *
          * Actions:
          *   - Retrieve Page Information
