@@ -327,129 +327,219 @@ pipeline {
             }
         }
 
-    stage('Publish to Confluence') {
-        when {
-        expression { return params.PUBLISH_TO_CONFLUENCE }
+        stage('Test Confluence Connection') {
+            when {
+                expression { return params.PUBLISH_TO_CONFLUENCE }
+            }
+
+            steps {
+                powershell '''
+                    $ErrorActionPreference = "Stop"
+
+                    Write-Host "Confluence URL: $env:CONFLUENCE_URL"
+
+                    $pair = "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
+                    $base64 = [Convert]::ToBase64String(
+                        [Text.Encoding]::ASCII.GetBytes($pair)
+                    )
+
+                    $headers = @{
+                        Authorization = "Basic $base64"
+                        Accept = "application/json"
+                    }
+
+                    try {
+                        $result = Invoke-RestMethod `
+                            -Method Get `
+                            -Uri "$env:CONFLUENCE_URL/rest/api/space" `
+                            -Headers $headers
+
+                        Write-Host "SUCCESS - Confluence authentication works"
+                        Write-Host "Spaces found: $($result.results.Count)"
+                    }
+                    catch {
+                        Write-Host "FAILED"
+                        Write-Host $_.Exception.Message
+
+                        if ($_.Exception.Response) {
+                            $reader = New-Object System.IO.StreamReader(
+                                $_.Exception.Response.GetResponseStream()
+                            )
+                            $response = $reader.ReadToEnd()
+
+                            Write-Host "Response:"
+                            Write-Host $response
+                        }
+
+                        throw
+                    }
+                '''
+            }
         }
 
-    steps {
-        powershell '''
-            $ErrorActionPreference = "Stop"
-
-            # --------------------------------------------------
-            # Validation
-            # --------------------------------------------------
-            if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
-                throw "CONFLUENCE_BASE_URL is required."
+        stage('Find Confluence Page') {
+            when {
+                expression { return params.PUBLISH_TO_CONFLUENCE }
             }
 
-            if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
-                [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
-                throw "Confluence credentials are missing."
-            }
+            steps {
+                powershell '''
+                    $ErrorActionPreference = "Stop"
 
-            $pageId = $env:CONFLUENCE_PARENT_ID
+                    $pair = "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
+                    $base64 = [Convert]::ToBase64String(
+                        [Text.Encoding]::ASCII.GetBytes($pair)
+                    )
 
-            if ([string]::IsNullOrWhiteSpace($pageId)) {
-                throw "CONFLUENCE_PARENT_PAGE_ID is required."
-            }
-
-            Write-Host "======================================"
-            Write-Host "Confluence Configuration"
-            Write-Host "======================================"
-            Write-Host "URL      : $env:CONFLUENCE_URL"
-            Write-Host "Page ID  : $pageId"
-            Write-Host "User     : $env:CONFLUENCE_CREDS_USR"
-            Write-Host "======================================"
-
-            # --------------------------------------------------
-            # Authentication
-            # --------------------------------------------------
-            $authBytes = [System.Text.Encoding]::ASCII.GetBytes(
-                "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
-            )
-
-            $authToken = [Convert]::ToBase64String($authBytes)
-
-            $headers = @{
-                Authorization = "Basic $authToken"
-                Accept        = "application/json"
-            }
-
-            # --------------------------------------------------
-            # Get Current Page Information
-            # --------------------------------------------------
-            $pageInfoUrl = "$env:CONFLUENCE_URL/rest/api/content/$pageId?expand=version"
-
-            Write-Host "Fetching current page information..."
-
-            $pageInfo = Invoke-RestMethod `
-                -Method Get `
-                -Uri $pageInfoUrl `
-                -Headers $headers
-
-            $newVersion = $pageInfo.version.number + 1
-
-            Write-Host "Current Version : $($pageInfo.version.number)"
-            Write-Host "New Version     : $newVersion"
-
-            # --------------------------------------------------
-            # Build Page Content
-            # --------------------------------------------------
-            $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
-
-            $pageContent = @(
-                "<h1>$env:APP_NAME $env:RELEASE_VERSION Release</h1>",
-                "<p>Automated release publication from Jenkins.</p>",
-                "<p><strong>Release notes ZIP:</strong></p>",
-                "<p>$env:RELEASE_NOTES_ZIP</p>",
-                "<p><strong>Deployment binaries ZIP:</strong></p>",
-                "<p>$env:BINARIES_ZIP</p>",
-                "<hr/>",
-                "<p><strong>Application:</strong> $env:APP_NAME</p>",
-                "<p><strong>Version:</strong> $env:RELEASE_VERSION</p>",
-                "<p><strong>Published By:</strong> Jenkins Pipeline</p>",
-                "<p><strong>Status:</strong> Successful</p>"
-            ) -join ""
-
-            # --------------------------------------------------
-            # Update Existing Page
-            # --------------------------------------------------
-            $payload = @{
-                id      = "$pageId"
-                type    = "page"
-                title   = $pageTitle
-
-                version = @{
-                    number = $newVersion
-                }
-
-                body = @{
-                    storage = @{
-                        value          = $pageContent
-                        representation = "storage"
+                    $headers = @{
+                        Authorization = "Basic $base64"
+                        Accept = "application/json"
                     }
-                }
-            } | ConvertTo-Json -Depth 20
 
-            Write-Host "Updating Confluence page..."
+                    $searchUrl = "$env:CONFLUENCE_URL/rest/api/content?spaceKey=$env:CONFLUENCE_SPACE"
 
-            Invoke-RestMethod `
-                -Method Put `
-                -Uri "$env:CONFLUENCE_URL/rest/api/content/$pageId" `
-                -Headers @{
-                    Authorization = "Basic $authToken"
-                    Accept        = "application/json"
-                    "Content-Type" = "application/json"
-                } `
-                -Body $payload
+                    Write-Host "Searching pages..."
 
-            Write-Host "======================================"
-            Write-Host "Confluence page updated successfully."
-            Write-Host "======================================"
-        '''
-      }
-    }
+                    $result = Invoke-RestMethod `
+                        -Method Get `
+                        -Uri $searchUrl `
+                        -Headers $headers
+
+                    Write-Host "======================================"
+
+                    foreach ($page in $result.results) {
+                        Write-Host "Page ID : $($page.id)"
+                        Write-Host "Title   : $($page.title)"
+                        Write-Host "--------------------------------------"
+                    }
+
+                    Write-Host "======================================"
+                '''
+            }
+        }
+            // stage('Publish to Confluence') {
+    //     when {
+    //     expression { return params.PUBLISH_TO_CONFLUENCE }
+    //     }
+
+    // steps {
+    //     powershell '''
+    //         $ErrorActionPreference = "Stop"
+
+    //         # --------------------------------------------------
+    //         # Validation
+    //         # --------------------------------------------------
+    //         if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_URL)) {
+    //             throw "CONFLUENCE_BASE_URL is required."
+    //         }
+
+    //         if ([string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_USR) -or
+    //             [string]::IsNullOrWhiteSpace($env:CONFLUENCE_CREDS_PSW)) {
+    //             throw "Confluence credentials are missing."
+    //         }
+
+    //         $pageId = $env:CONFLUENCE_PARENT_ID
+
+    //         if ([string]::IsNullOrWhiteSpace($pageId)) {
+    //             throw "CONFLUENCE_PARENT_PAGE_ID is required."
+    //         }
+
+    //         Write-Host "======================================"
+    //         Write-Host "Confluence Configuration"
+    //         Write-Host "======================================"
+    //         Write-Host "URL      : $env:CONFLUENCE_URL"
+    //         Write-Host "Page ID  : $pageId"
+    //         Write-Host "User     : $env:CONFLUENCE_CREDS_USR"
+    //         Write-Host "======================================"
+
+    //         # --------------------------------------------------
+    //         # Authentication
+    //         # --------------------------------------------------
+    //         $authBytes = [System.Text.Encoding]::ASCII.GetBytes(
+    //             "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
+    //         )
+
+    //         $authToken = [Convert]::ToBase64String($authBytes)
+
+    //         $headers = @{
+    //             Authorization = "Basic $authToken"
+    //             Accept        = "application/json"
+    //         }
+
+    //         # --------------------------------------------------
+    //         # Get Current Page Information
+    //         # --------------------------------------------------
+    //         $pageInfoUrl = "$env:CONFLUENCE_URL/rest/api/content/$pageId?expand=version"
+
+    //         Write-Host "Fetching current page information..."
+
+    //         $pageInfo = Invoke-RestMethod `
+    //             -Method Get `
+    //             -Uri $pageInfoUrl `
+    //             -Headers $headers
+
+    //         $newVersion = $pageInfo.version.number + 1
+
+    //         Write-Host "Current Version : $($pageInfo.version.number)"
+    //         Write-Host "New Version     : $newVersion"
+
+    //         # --------------------------------------------------
+    //         # Build Page Content
+    //         # --------------------------------------------------
+    //         $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
+
+    //         $pageContent = @(
+    //             "<h1>$env:APP_NAME $env:RELEASE_VERSION Release</h1>",
+    //             "<p>Automated release publication from Jenkins.</p>",
+    //             "<p><strong>Release notes ZIP:</strong></p>",
+    //             "<p>$env:RELEASE_NOTES_ZIP</p>",
+    //             "<p><strong>Deployment binaries ZIP:</strong></p>",
+    //             "<p>$env:BINARIES_ZIP</p>",
+    //             "<hr/>",
+    //             "<p><strong>Application:</strong> $env:APP_NAME</p>",
+    //             "<p><strong>Version:</strong> $env:RELEASE_VERSION</p>",
+    //             "<p><strong>Published By:</strong> Jenkins Pipeline</p>",
+    //             "<p><strong>Status:</strong> Successful</p>"
+    //         ) -join ""
+
+    //         # --------------------------------------------------
+    //         # Update Existing Page
+    //         # --------------------------------------------------
+    //         $payload = @{
+    //             id      = "$pageId"
+    //             type    = "page"
+    //             title   = $pageTitle
+
+    //             version = @{
+    //                 number = $newVersion
+    //             }
+
+    //             body = @{
+    //                 storage = @{
+    //                     value          = $pageContent
+    //                     representation = "storage"
+    //                 }
+    //             }
+    //         } | ConvertTo-Json -Depth 20
+
+    //         Write-Host "Updating Confluence page..."
+
+    //         Invoke-RestMethod `
+    //             -Method Put `
+    //             -Uri "$env:CONFLUENCE_URL/rest/api/content/$pageId" `
+    //             -Headers @{
+    //                 Authorization = "Basic $authToken"
+    //                 Accept        = "application/json"
+    //                 "Content-Type" = "application/json"
+    //             } `
+    //             -Body $payload
+
+    //         Write-Host "======================================"
+    //         Write-Host "Confluence page updated successfully."
+    //         Write-Host "======================================"
+    //     '''
+    //   }
+    // }
 
   }
 
