@@ -225,16 +225,37 @@ pipeline {
         /*******************************************************************************************
          * STAGE 3 - VALIDATE RELEASE VERSION
          *******************************************************************************************/
-         stage('Validate Release Version') {
+        stage('Validate Release Version') {
             steps {
                 script {
+
+                    // If RELEASE_VERSION not provided, try to derive it from release note file name
                     if (!params.RELEASE_VERSION?.trim()) {
-                        error("RELEASE_VERSION is required.")
+
+                        def fileName = params.RELEASE_NOTE_FILE
+
+                        if (!fileName) {
+                            error("RELEASE_VERSION is required or a valid RELEASE_NOTE_FILE must be uploaded.")
+                        }
+
+                        def matcher = fileName =~ /(v\d+\.\d+\.\d+)/
+
+                        if (matcher.find()) {
+                            env.RELEASE_VERSION = matcher.group(1)
+
+                            echo "Release version extracted from file name: ${env.RELEASE_VERSION}"
+                        } else {
+                            error("Unable to extract release version from file name '${fileName}'. Expected format: ReleaseNotes_v1.0.1.pdf")
+                        }
+                    } else {
+                        env.RELEASE_VERSION = params.RELEASE_VERSION.trim()
                     }
+
+                    echo "Using Release Version: ${env.RELEASE_VERSION}"
                 }
             }
         }
-
+        
         /*******************************************************************************************
          * STAGE 4 - PROCESS RELEASE NOTES PDF
          *******************************************************************************************/
