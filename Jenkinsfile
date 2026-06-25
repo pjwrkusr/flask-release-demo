@@ -344,33 +344,44 @@ pipeline {
          *******************************************************************************************/
         stage('Send email') {
             when {
-                expression { return params.PUBLISH_EMAIL }
+            expression { return params.PUBLISH_EMAIL }
             }
             steps {
-                script {
-                    def recipients = [
-                        env.EMAIL_TO_LIST,
-                        env.EMAIL_CC_LIST,
-                        env.EMAIL_BCC_LIST
-                    ].findAll { it?.trim() }.join(',')
+            script {
+            def recipients = [
+            env.EMAIL_TO_LIST,
+            env.EMAIL_CC_LIST,
+            env.EMAIL_BCC_LIST
+            ].findAll { it?.trim() }.join(',')
+
+                    // Find latest ZIP file in DIST_DIR
+                    def latestZip = sh(
+                        script: """
+                            ls -1t ${env.DIST_DIR}/*.zip 2>/dev/null | head -n 1
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    if (!latestZip) {
+                        error("No ZIP file found in ${env.DIST_DIR}")
+                    }
 
                     echo "Email recipients: ${recipients}"
-                    echo "Attachments path: ${env.DIST_DIR}/*.zip"
+                    echo "Latest ZIP attachment: ${latestZip}"
 
                     emailext(
                         to: recipients,
                         from: "${env.EMAIL_FROM_ADDR}",
                         replyTo: "${env.EMAIL_REPLY_TO}",
-                        subject: "Release ${params.RELEASE_VERSION}",
+                        subject: "Release ${env.RELEASE_VERSION ?: params.RELEASE_VERSION}",
                         mimeType: 'text/html',
-                        attachmentsPattern: "${env.DIST_DIR}/*.zip",
+                        attachmentsPattern: latestZip,
                         body: """
                             <p>Hello,</p>
-                            <p>Release <strong>${params.RELEASE_VERSION}</strong> has been generated.</p>
-                            <p>The following ZIP files are attached:</p>
+                            <p>Release <strong>${env.RELEASE_VERSION ?: params.RELEASE_VERSION}</strong> has been generated.</p>
+                            <p>The latest release package is attached:</p>
                             <ul>
-                                <li>${env.RELEASE_NOTES_ZIP}</li>
-                                <li>${env.BINARIES_ZIP}</li>
+                                <li>${latestZip.tokenize('/').last()}</li>
                             </ul>
                             <p>Regards,<br/>Jenkins</p>
                         """
@@ -390,11 +401,11 @@ pipeline {
          *******************************************************************************************/
         stage('Publish to GitHub') {
             when {
-                expression { return params.PUBLISH_TO_GITHUB }
+            expression { return params.PUBLISH_TO_GITHUB }
             }
             steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
+            powershell '''
+            $ErrorActionPreference = "Stop"
 
                     if ([string]::IsNullOrWhiteSpace($env:GH_OWNER) -or [string]::IsNullOrWhiteSpace($env:GH_REPO)) {
                         throw "GITHUB_OWNER and GITHUB_REPO are required."
@@ -447,6 +458,7 @@ pipeline {
                     if (-not $release) {
                         try {
                             $existingReleaseUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/tags/$tagName"
+
                             $release = Invoke-RestMethod `
                                 -Method Get `
                                 -Uri $existingReleaseUrl `
@@ -460,7 +472,8 @@ pipeline {
 
                             if ($createFailed) {
                                 throw "GitHub create-release failed, and no existing release was found by tag '$tagName'."
-                            } else {
+                            }
+                            else {
                                 throw
                             }
                         }
@@ -476,54 +489,65 @@ pipeline {
                     Write-Host "Using GitHub release ID: $releaseId"
                     Write-Host "Resolved upload URL base: $uploadUrl"
 
+                    # Find latest ZIP file
+                    $latestZip = Get-ChildItem `
+                        -Path $env:DIST_DIR `
+                        -Filter "*.zip" |
+                        Sort-Object LastWriteTime -Descending |
+                        Select-Object -First 1
+
+                    if (-not $latestZip) {
+                        throw "No ZIP files found in $env:DIST_DIR"
+                    }
+
+                    Write-Host "Latest ZIP file found: $($latestZip.Name)"
+                    Write-Host "Modified time: $($latestZip.LastWriteTime)"
+
+                    # Get existing assets
                     $assetsUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/$releaseId/assets"
-                    $assets = Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers
+                    $assets = Invoke-RestMethod `
+                        -Method Get `
+                        -Uri $assetsUrl `
+                        -Headers $headers
 
-                    $targetAssetNames = @(
-                        $env:RELEASE_NOTES_ZIP,
-                        $env:BINARIES_ZIP
-                    )
-
+                    # Delete asset with same name if it already exists
                     foreach ($asset in $assets) {
-                        if ($targetAssetNames -contains $asset.name) {
+                        if ($asset.name -eq $latestZip.Name) {
                             Write-Host "Deleting existing asset: $($asset.name)"
+
                             $deleteUrl = "https://api.github.com/repos/$env:GH_OWNER/$env:GH_REPO/releases/assets/$($asset.id)"
-                            Invoke-RestMethod -Method Delete -Uri $deleteUrl -Headers $headers | Out-Null
+
+                            Invoke-RestMethod `
+                                -Method Delete `
+                                -Uri $deleteUrl `
+                                -Headers $headers | Out-Null
                         }
                     }
 
-                    $filesToUpload = @(
-                        (Join-Path $env:DIST_DIR $env:RELEASE_NOTES_ZIP),
-                        (Join-Path $env:DIST_DIR $env:BINARIES_ZIP)
-                    )
+                    # Upload latest ZIP
+                    $filePath = $latestZip.FullName
+                    $fileName = $latestZip.Name
 
-                    foreach ($filePath in $filesToUpload) {
-                        if (-not (Test-Path $filePath)) {
-                            throw "GitHub upload file not found: $filePath"
-                        }
+                    $encodedName = [System.Uri]::EscapeDataString($fileName)
+                    $assetUploadUrl = "{0}?name={1}" -f $uploadUrl, $encodedName
 
-                        $fileName = [System.IO.Path]::GetFileName($filePath)
-                        $encodedName = [System.Uri]::EscapeDataString($fileName)
-                        $assetUploadUrl = "{0}?name={1}" -f $uploadUrl, $encodedName
+                    Write-Host "Uploading asset: $fileName"
 
-                        Write-Host "Uploading asset: $fileName"
-                        Write-Host "Upload URL: $assetUploadUrl"
+                    $uploadResponse = Invoke-RestMethod `
+                        -Method Post `
+                        -Uri $assetUploadUrl `
+                        -Headers $headers `
+                        -InFile $filePath `
+                        -ContentType "application/zip"
 
-                        $uploadResponse = Invoke-RestMethod `
-                            -Method Post `
-                            -Uri $assetUploadUrl `
-                            -Headers $headers `
-                            -InFile $filePath `
-                            -ContentType "application/zip"
+                    Write-Host "Uploaded GitHub asset: $fileName"
 
-                        Write-Host "Uploaded GitHub asset: $fileName"
-                        if ($uploadResponse.browser_download_url) {
-                            Write-Host "Download URL: $($uploadResponse.browser_download_url)"
-                        }
+                    if ($uploadResponse.browser_download_url) {
+                        Write-Host "Download URL: $($uploadResponse.browser_download_url)"
                     }
                 '''
             }
-        }
+    }
 
         /*******************************************************************************************
          * STAGE 8 - PUBLISH TO CONFLUENCE
@@ -534,97 +558,144 @@ pipeline {
          *   - Update Page Content
          *   - Publish Release Details
          *******************************************************************************************/
-        stage('Publish to Confluence') {
-            when {
-                expression { return params.PUBLISH_TO_CONFLUENCE }
-            }
+stage('Publish to Confluence') {
+when {
+expression { return params.PUBLISH_TO_CONFLUENCE }
+}
 
-            steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
+steps {
+    powershell '''
+        $ErrorActionPreference = "Stop"
 
-                    $pageId = "131214"
+        $pair = "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
+        $base64 = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes($pair)
+        )
 
-                    $pair = "$($env:CONFLUENCE_CREDS_USR):$($env:CONFLUENCE_CREDS_PSW)"
-                    $base64 = [Convert]::ToBase64String(
-                        [Text.Encoding]::ASCII.GetBytes($pair)
-                    )
-
-                    $headers = @{
-                        Authorization = "Basic $base64"
-                        Accept = "application/json"
-                    }
-
-                    Write-Host "Getting current page version..."
-
-                    $searchUrl = "$env:CONFLUENCE_URL/rest/api/content?title=Flask&spaceKey=DEMO&expand=version"
-
-                    $pageSearch = Invoke-RestMethod `
-                        -Method Get `
-                        -Uri $searchUrl `
-                        -Headers $headers
-
-                    if ($pageSearch.size -eq 0) {
-                        throw "Confluence page not found."
-                    }
-
-                    $pageInfo = $pageSearch.results[0]
-
-                    $pageId = $pageInfo.id
-                    $currentVersion = $pageInfo.version.number
-                    $newVersion = $currentVersion + 1
-
-                    Write-Host "Page ID         : $pageId"
-                    Write-Host "Current Version : $currentVersion"
-                    Write-Host "New Version     : $newVersion"
-
-                    $pageTitle = "$env:APP_NAME $env:RELEASE_VERSION Release"
-
-                    $pageContent = @(
-                        "<h1>$env:APP_NAME $env:RELEASE_VERSION Release</h1>",
-                        "<p>Automated release publication from Jenkins.</p>",
-                        "<p><strong>Release notes ZIP:</strong></p>",
-                        "<p>$env:RELEASE_NOTES_ZIP</p>",
-                        "<p><strong>Deployment binaries ZIP:</strong></p>",
-                        "<p>$env:BINARIES_ZIP</p>"
-                    ) -join ""
-
-                    $payload = @{
-                        id      = "$pageId"
-                        type    = "page"
-                        title   = $pageInfo.title
-                        version = @{
-                            number = $newVersion
-                        }
-                        body = @{
-                            storage = @{
-                                value = $pageContent
-                                representation = "storage"
-                            }
-                        }
-                    } | ConvertTo-Json -Depth 20
-
-                    Write-Host "Updating Confluence page..."
-
-                    $response = Invoke-RestMethod `
-                        -Method Put `
-                        -Uri "$env:CONFLUENCE_URL/rest/api/content/$pageId" `
-                        -Headers @{
-                            Authorization = "Basic $base64"
-                            Accept = "application/json"
-                            "Content-Type" = "application/json"
-                        } `
-                        -Body $payload
-
-                    Write-Host "======================================"
-                    Write-Host "Confluence page updated successfully."
-                    Write-Host "Page ID : $($response.id)"
-                    Write-Host "Version : $($response.version.number)"
-                    Write-Host "======================================"
-                '''
-            }
+        $headers = @{
+            Authorization = "Basic $base64"
+            Accept = "application/json"
         }
-  }
+
+        Write-Host "Getting Confluence page..."
+
+        $searchUrl = "$env:CONFLUENCE_URL/rest/api/content?title=Flask&spaceKey=DEMO&expand=version"
+
+        $pageSearch = Invoke-RestMethod `
+            -Method Get `
+            -Uri $searchUrl `
+            -Headers $headers
+
+        if ($pageSearch.size -eq 0) {
+            throw "Confluence page not found."
+        }
+
+        $pageInfo = $pageSearch.results[0]
+
+        $pageId = $pageInfo.id
+        $currentVersion = $pageInfo.version.number
+        $newVersion = $currentVersion + 1
+
+        Write-Host "Page ID         : $pageId"
+        Write-Host "Current Version : $currentVersion"
+        Write-Host "New Version     : $newVersion"
+
+        # Find latest ZIP file
+        Write-Host "Searching for ZIP files in $env:DIST_DIR ..."
+
+        $latestZip = Get-ChildItem `
+            -Path $env:DIST_DIR `
+            -Filter "*.zip" `
+            -Recurse |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+        if (-not $latestZip) {
+            throw "No ZIP files found in $env:DIST_DIR"
+        }
+
+        Write-Host "Latest ZIP found:"
+        Write-Host "Name : $($latestZip.Name)"
+        Write-Host "Path : $($latestZip.FullName)"
+
+        # Upload attachment to Confluence
+        Write-Host "Uploading ZIP attachment..."
+
+        $attachmentUrl = "$env:CONFLUENCE_URL/rest/api/content/$pageId/child/attachment"
+
+        $uploadHeaders = @{
+            Authorization = "Basic $base64"
+            "X-Atlassian-Token" = "nocheck"
+        }
+
+        $attachmentResponse = Invoke-RestMethod `
+            -Method Post `
+            -Uri $attachmentUrl `
+            -Headers $uploadHeaders `
+            -Form @{
+                file = Get-Item $latestZip.FullName
+            }
+
+        Write-Host "Attachment uploaded successfully."
+
+        # Build page content
+        $pageContent = @"
+
+<h1>$env:APP_NAME $env:RELEASE_VERSION Release</h1>
+
+<p>Automated release publication from Jenkins.</p>
+
+<h2>Release Package</h2>
+
+<p>
+<a href="/download/attachments/$pageId/$($latestZip.Name)">
+$($latestZip.Name)
+</a>
+</p>
+
+<p>
+Uploaded on: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+</p>
+"@
+
+        $payload = @{
+            id      = "$pageId"
+            type    = "page"
+            title   = $pageInfo.title
+            version = @{
+                number = $newVersion
+            }
+            body = @{
+                storage = @{
+                    value = $pageContent
+                    representation = "storage"
+                }
+            }
+        } | ConvertTo-Json -Depth 20
+
+        Write-Host "Updating Confluence page..."
+
+        $response = Invoke-RestMethod `
+            -Method Put `
+            -Uri "$env:CONFLUENCE_URL/rest/api/content/$pageId" `
+            -Headers @{
+                Authorization = "Basic $base64"
+                Accept = "application/json"
+                "Content-Type" = "application/json"
+            } `
+            -Body $payload
+
+        Write-Host "======================================"
+        Write-Host "Confluence page updated successfully."
+        Write-Host "Page ID : $($response.id)"
+        Write-Host "Version : $($response.version.number)"
+        Write-Host "Attached ZIP : $($latestZip.Name)"
+        Write-Host "======================================"
+    '''
+      }
+
+    }
+ }
 
     /***********************************************************************************************
      * POST BUILD ACTIONS
